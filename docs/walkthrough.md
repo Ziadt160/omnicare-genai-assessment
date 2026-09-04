@@ -243,6 +243,37 @@ again, and a confirmation paused in chat could not be resumed by voice.
 
 ![The call on a phone](images/12-voice-call-mobile.png)
 
+### What a real call found
+
+The voice path was reported as "nothing responds". It was driven end to end with
+Piper synthesising an utterance and Chrome playing it back as a fake microphone,
+which is the only way to get a repeatable call without a person in the room.
+Three separate faults, none of which a unit test would have shown:
+
+**The voice worker was given 30 s while the agent was allowed 280 s.**
+`.env.local-ollama` raises the model, agent and gateway budgets for a local
+model and never raised the voice one, so a turn that the agent answered
+correctly in 45 s had its reply thrown away and the caller heard "Sorry, I
+wasn't able to complete that."
+
+**Whisper transcribes silence as words.** Not an empty string - confident,
+ordinary English. A quiet room produced a steady stream of "Bye.", "Mm.",
+"Thank you." and "Thanks for watching!", and every one of them was a full agent
+turn: a graph run, a model call and a spoken reply to something nobody said.
+They are filtered on the whole utterance, never on length or confidence,
+because the confirmation vocabulary is one word long and swallowing "no" would
+make an irreversible write unconfirmable by voice.
+
+**The greeting never played**, because the session was ending before it ran.
+
+Afterwards the same test produced a clean call:
+
+```
+transcript_final  " ...my jewellery was stolen from my home ... and submit claim for that."
+confirm           "I'm about to file a Personal Property claim on policy
+                   P-O-L, one two three four five for $5000. Shall I go ahead?"
+```
+
 ### Letting the caller finish
 
 `livekit-agents` ends a turn after **0.5 s** of silence by default. That is tuned
@@ -344,16 +375,16 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 262 in-process, no container, no network
-pytest tests/e2e -m e2e   # 48 against the running stack
+make test        # 292 in-process, no container, no network
+pytest tests/e2e -m e2e   # 57 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 184 |
+| `tests/unit` | 214 |
 | `tests/contract` | 47 |
-| `tests/e2e` | 48 |
+| `tests/e2e` | 57 |
 | `evals` | 31 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·

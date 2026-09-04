@@ -45,6 +45,48 @@ concisely. Do not add coverage details, claim statuses or policy numbers of \
 your own - if the service did not say it, you do not know it."""
 
 
+# What Whisper returns when it is handed near-silence. It does not return an
+# empty string - it returns confident, ordinary English, and these are its
+# best-known artefacts. A live call produced a stream of them between the
+# caller's real sentences, and each one cost a full agent turn: a graph run, a
+# model call, and a spoken reply to something nobody said.
+#
+# Matched against the whole utterance only. "Bye, but first tell me about my
+# policy" is a real turn; "Bye." on its own, in a call the caller has not ended,
+# is the microphone being quiet.
+SILENCE_ARTEFACTS = frozenset({
+    "", ".", "..", "...", "。", "♪", "♫",
+    "bye", "bye bye", "byebye", "goodbye",
+    "thank you", "thanks", "thank you very much", "thanks for watching",
+    "you", "mm", "mmm", "mm-hmm", "mhm", "hmm", "uh", "um", "ah", "oh",
+    "[music]", "(music)", "[silence]", "(silence)", "[blank_audio]",
+})
+
+# Never filtered, whatever else matches. A paused `submit_claim` is resumed by
+# the caller's next utterance and that utterance is usually one word, so a
+# filter that swallowed "no" would make an irreversible write unconfirmable by
+# voice. Listed explicitly rather than relying on none of them appearing above,
+# because that is a property worth stating rather than hoping for.
+CONFIRMATION_WORDS = frozenset({
+    "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "correct", "right",
+    "go ahead", "do it", "confirm",
+    "no", "nope", "nah", "cancel", "stop", "wait", "don't",
+})
+
+
+def is_probably_silence(text: str) -> bool:
+    """Whether a transcript is Whisper hearing the room rather than the caller.
+
+    Deliberately not a length or confidence threshold. Both would catch "no",
+    and dropping a refusal is far worse than letting "Bye." through: one is a
+    wasted turn, the other files a claim the policyholder declined.
+    """
+    stripped = text.strip().strip(".!?,。 ").lower()
+    if stripped in CONFIRMATION_WORDS:
+        return False
+    return stripped in SILENCE_ARTEFACTS
+
+
 def normalize_transcript(text: str) -> str:
     """Rewrite spoken identifiers into canonical form before the agent sees them.
 
@@ -262,6 +304,11 @@ async def entrypoint(ctx: Any) -> None:
         """
         text = getattr(event, "transcript", "") or ""
         is_final = bool(getattr(event, "is_final", False))
+        # Not just skipped as a turn - kept off the screen as well. A call that
+        # writes "Bye. Bye. Bye." into the conversation while the caller is
+        # thinking looks broken, and it is the transcript they will re-read.
+        if is_probably_silence(text):
+            return
         confidence = getattr(event, "confidence", None)
         if confidence is not None:
             shim.last_confidence = float(confidence)

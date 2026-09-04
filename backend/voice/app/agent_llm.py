@@ -31,6 +31,7 @@ from typing import Any, Callable
 from livekit.agents import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions, llm
 
 from libs.contracts import RunEvent
+from .worker import is_probably_silence
 
 log = logging.getLogger("omnicare.voice.llm")
 
@@ -111,6 +112,15 @@ class _AgentStream(llm.LLMStream):
     async def _run(self) -> None:
         shim: OmniCareLLM = self._llm  # type: ignore[assignment]
         message = _latest_user_text(self._chat_ctx)
+
+        if is_probably_silence(message):
+            # Whisper transcribes a quiet room as ordinary English - "Bye.",
+            # "Thank you.", "Mm." - and each one used to cost a graph run, a
+            # model call and a spoken reply to something nobody said. Silence
+            # is the correct response to silence; an apology would be a reply
+            # to a turn that never happened.
+            log.debug("ignoring probable silence: %r", message)
+            return
 
         if not message:
             # No user turn to answer. Reached when something asks the session

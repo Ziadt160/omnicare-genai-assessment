@@ -21,6 +21,7 @@ from voice.app.worker import (
     LIBRARY_MIN_DELAY,
     browser_message,
     endpointing_options,
+    is_probably_silence,
     normalize_transcript,
 )
 
@@ -348,3 +349,48 @@ def test_the_wait_is_not_so_long_the_call_feels_dead() -> None:
     at the other end."""
     opts = endpointing_options(VoiceSettings())
     assert opts["min_delay"] <= 3.0
+
+
+# --------------------------------------------------- Whisper hears things
+
+@pytest.mark.parametrize(
+    "heard",
+    ["", "  ", ".", "...", "Bye.", "Bye bye.", "Thank you.", "Thanks for watching!",
+     "you", "Mm.", "Mm-hmm.", "Hmm", "Uh", "[Music]", "♪"],
+)
+def test_silence_transcribed_as_words_is_not_a_turn(heard: str) -> None:
+    """Whisper does not return nothing for near-silence - it returns text.
+
+    "Bye.", "Thank you.", "Mm." and "Thanks for watching!" are its well-known
+    artefacts on an empty clip, and a live call produced a stream of exactly
+    those between the caller's real sentences. Each one was a full agent turn:
+    a graph run, a model call, and a spoken reply to something nobody said.
+    """
+    assert is_probably_silence(heard) is True
+
+
+@pytest.mark.parametrize(
+    "heard",
+    ["yes", "Yes.", "no", "No.", "yeah", "nope", "correct", "cancel", "stop",
+     "go ahead", "that is right"],
+)
+def test_the_confirmation_vocabulary_is_never_filtered(heard: str) -> None:
+    """The property that makes this safe rather than clever.
+
+    A paused `submit_claim` is resumed by the caller's next utterance, and that
+    utterance is usually one word. A filter that drops short turns would make
+    an irreversible write unconfirmable by voice - and "no" being swallowed is
+    far worse than "Bye." getting through.
+    """
+    assert is_probably_silence(heard) is False
+
+
+@pytest.mark.parametrize(
+    "heard",
+    ["Is flood damage covered?", "What is the status of claim CLM-8821?",
+     "A pipe burst in my kitchen", "Bye, but first tell me about my policy"],
+)
+def test_real_speech_is_never_filtered(heard: str) -> None:
+    """Including a sentence that merely starts with an artefact word - the
+    match is on the whole utterance, not on a substring."""
+    assert is_probably_silence(heard) is False
