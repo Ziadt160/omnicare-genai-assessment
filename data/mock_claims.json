@@ -1,0 +1,18 @@
+[
+  {
+    "claim_id": "CLM-8821",
+    "policy_number": "POL-1092",
+    "claim_type": "Water Damage",
+    "status": "Approved",
+    "amount": 3500.00,
+    "description": ""
+  },
+  {
+    "claim_id": "CLM-9014",
+    "policy_number": "POL-3341",
+    "claim_type": "Personal Property",
+    "status": "Under Review",
+    "amount": 1200.00,
+    "description": ""
+  }
+]

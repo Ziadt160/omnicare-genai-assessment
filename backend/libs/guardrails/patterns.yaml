@@ -1,0 +1,63 @@
+# Prompt-injection detection corpus.
+#
+# Layer 1 of five (see spec §7). Deterministic, runs BEFORE any LLM call, and
+# is the reason a blocked input costs zero tokens. Every rule here has a
+# matching case in evals/dataset/safety.yaml.
+#
+# severity: block  -> refuse outright
+# severity: flag   -> allow, but force confirmation tier T2 on any write
+
+rules:
+  - id: INJ-01
+    severity: block
+    description: Instruction override
+    patterns:
+      - '(?i)\bignore\s+(all\s+)?(previous|prior|above|earlier)\s+(instructions?|prompts?|rules?)'
+      - '(?i)\bdisregard\s+(all\s+)?(previous|prior|above|your)\s+\w+'
+      - '(?i)\bforget\s+(everything|all)\b.{0,20}\b(said|told|instructed)'
+
+  - id: INJ-02
+    severity: block
+    description: System-prompt extraction
+    patterns:
+      - '(?i)\b(print|show|reveal|repeat|output|display|dump)\b.{0,30}\b(system\s+prompt|instructions|initial\s+prompt)'
+      - '(?i)\bwhat\s+(are|were)\s+your\s+(original\s+)?(instructions|rules|system\s+prompt)'
+      - '(?i)\brepeat\s+(everything|the\s+text)\s+above'
+
+  - id: INJ-03
+    severity: block
+    description: Role-marker injection
+    patterns:
+      - '(?i)^\s*(system|assistant|developer)\s*:'
+      - '(?i)<\s*/?\s*(system|im_start|im_end)\s*>'
+      - '(?i)\[\s*(INST|/INST|SYSTEM)\s*\]'
+
+  - id: INJ-04
+    severity: block
+    description: Privilege escalation / fake authority
+    patterns:
+      - '(?i)\byou\s+are\s+now\s+(in\s+)?(admin|developer|debug|god|root|sudo)\s*mode'
+      - '(?i)\b(admin|developer|debug)\s+mode\s+(enabled|on|activated)'
+      - '(?i)\bas\s+an?\s+(admin|administrator|omnicare\s+employee)\b.{0,40}\b(approve|override|bypass)'
+
+  - id: INJ-05
+    severity: block
+    description: Direct manipulation of claim state - never a legitimate user request
+    patterns:
+      - '(?i)\b(approve|deny|reject|close)\s+(claim\s+)?CLM-\d{4}'
+      - '(?i)\b(set|change|update)\b.{0,20}\bstatus\b.{0,20}\b(to\s+)?(approved|denied)'
+
+  - id: INJ-06
+    severity: flag
+    description: Encoded payload - not blocked outright, but never trusted for a write
+    patterns:
+      - '(?i)\b(base64|rot13|hex)\s*(decode|encoded?)\b'
+      - '(?i)\b(decode|decoding|encoded)\b.{0,24}\b(base64|rot13|hex)\b'
+      - '[A-Za-z0-9+/]{80,}={0,2}'
+
+  - id: INJ-07
+    severity: block
+    description: Exfiltration attempt
+    patterns:
+      - '(?i)\b(send|post|forward|email)\b.{0,30}\b(to|at)\b.{0,10}https?://'
+      - '(?i)\bcurl\s+https?://'

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OmniCare Assistant</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header class="masthead">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">OC</span>
+      <div>
+        <h1>OmniCare Assistant</h1>
+        <p>Policy coverage &middot; Claim status &middot; File a claim</p>
+      </div>
+    </div>
+    <div class="status">
+      <span id="conn" class="pill pill--idle">connecting</span>
+      <span id="voice-state" class="pill pill--idle" hidden>voice off</span>
+    </div>
+  </header>
+
+  <main>
+    <ol id="thread" class="thread" aria-live="polite" aria-label="Conversation">
+      <li class="msg msg--assistant">
+        <div class="bubble">
+          <p>Hello. I can tell you what your policy covers, check the status of a
+             claim you have already filed, or help you file a new one.</p>
+          <p class="hint">Try: <em>&ldquo;A pipe burst in my kitchen &mdash; am I covered?&rdquo;</em>
+             or <em>&ldquo;What is the status of claim CLM-8821?&rdquo;</em></p>
+        </div>
+      </li>
+    </ol>
+
+    <!-- Shown when the graph pauses before an irreversible write. -->
+    <div id="confirm" class="confirm" hidden>
+      <p id="confirm-text" class="confirm__text"></p>
+      <div class="confirm__actions">
+        <button id="confirm-yes" class="btn btn--primary" type="button">Yes, file it</button>
+        <button id="confirm-no" class="btn" type="button">Cancel</button>
+      </div>
+    </div>
+  </main>
+
+  <form id="composer" class="composer" autocomplete="off">
+    <button id="mic" class="btn btn--icon" type="button"
+            title="Voice is unavailable" disabled aria-label="Start voice">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z"/>
+        <path fill="currentColor" d="M18 11a6 6 0 0 1-12 0H4a8 8 0 0 0 7 7.94V22h2v-3.06A8 8 0 0 0 20 11Z"/>
+      </svg>
+    </button>
+    <input id="input" class="composer__input" type="text" required
+           placeholder="Ask about your policy, or a claim number…"
+           aria-label="Message">
+    <button id="send" class="btn btn--primary" type="submit">Send</button>
+  </form>
+
+  <p class="foot">
+    Prototype. Answers cite the policy document; claims are never filed without
+    your confirmation.
+  </p>
+
+  <script src="config.js" onerror="window.OMNICARE_API='http://localhost:8080'"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.2/dist/livekit-client.umd.js"></script>
+  <script src="app.js"></script>
+  <script src="voice.js"></script>
+</body>
+</html>

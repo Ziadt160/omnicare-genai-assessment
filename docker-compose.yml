@@ -1,0 +1,194 @@
+# One `docker compose up` brings the whole system to a working chat.
+#
+# Profiles:
+#   (default)          chat + voice + retrieval + stores
+#   --profile obs      adds the Phoenix tracing UI
+#   --profile local    adds Ollama (NOT default - a multi-GB pull would wreck
+#                      the reviewer first run; see spec section 13)
+#
+# Scaling demo:  docker compose up --scale agent=4
+#   The Redis Streams consumer group distributes work across all four with no
+#   config change. This is what makes the scaling claim demonstrable.
+
+name: omnicare
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: omnicare
+      POSTGRES_USER: omnicare
+      POSTGRES_PASSWORD: omnicare
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U omnicare -d omnicare"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  retrieval:
+    build:
+      context: ./backend
+      target: retrieval
+    environment:
+      RETRIEVAL_EMBEDDING_MODEL: BAAI/bge-small-en-v1.5
+      RETRIEVAL_QDRANT_PATH: /data/qdrant
+      # "memory" is adequate for a two-section corpus and is the default. The
+      # Qdrant adapter implements the same VectorStore port; swapping is this
+      # one variable and nothing else.
+      RETRIEVAL_VECTOR_BACKEND: ${RETRIEVAL_VECTOR_BACKEND:-memory}
+      RETRIEVAL_SOURCE_DIR: /data/source
+    volumes:
+      - qdrant:/data/qdrant
+      - ./data:/data/source:ro
+    healthcheck:
+      # Generous retries and start_period: the embedding model warms on boot,
+      # and without this the first compose up races the warm-up and looks broken.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  agent:
+    build:
+      context: ./backend
+      target: agent
+    environment:
+      AGENT_LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      AGENT_LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+      AGENT_LLM_API_KEY: ${GROQ_API_KEY:-}
+      AGENT_LLM_BASE_URL: ${LLM_BASE_URL:-}
+      # Opt-in, not a default. A local or stubbed model has no tokens-per-minute
+      # ceiling, and applying one throttles a provider that reports no usage at
+      # all - the reservation never gets corrected, the ledger over-counts, and
+      # turns start timing out against a model that answers instantly.
+      # .env.groq sets it to 8000 for the hosted free tier.
+      AGENT_LLM_TOKENS_PER_MINUTE: ${LLM_TOKENS_PER_MINUTE:-0}
+      # A 7B model on CPU takes tens of seconds per call, and a ReAct turn is
+      # two calls. These are sized for a hosted provider by default and raised
+      # by .env.local-ollama.
+      AGENT_LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-20}
+      AGENT_RUN_TIMEOUT_S: ${AGENT_RUN_TIMEOUT_S:-25}
+      AGENT_LLM_FALLBACK_PROVIDER: ${LLM_FALLBACK_PROVIDER:-}
+      AGENT_LLM_FALLBACK_API_KEY: ${NVIDIA_API_KEY:-}
+      AGENT_REDIS_URL: redis://redis:6379/0
+      AGENT_DATABASE_URL: postgresql://omnicare:omnicare@postgres:5432/omnicare
+      AGENT_RETRIEVAL_URL: http://retrieval:8000
+      # json (default - the brief names mock_claims.json), postgres, or memory.
+      # The swap is this one variable and nothing else; see docs/adr/0005.
+      AGENT_CLAIMS_BACKEND: ${CLAIMS_BACKEND:-json}
+      AGENT_CLAIMS_PATH: /data/claims/mock_claims.json
+      AGENT_REQUIRE_CLAIM_CONFIRMATION: "true"
+      AGENT_MAX_GRAPH_ITERATIONS: "5"
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: omnicare-agent
+    volumes:
+      - claims:/data/claims
+      - ./data/mock_claims.json:/data/seed/mock_claims.json:ro
+    depends_on:
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+      retrieval: {condition: service_healthy}
+
+  gateway:
+    build:
+      context: ./backend
+      target: gateway
+    # Bound to IPv4 explicitly. Docker Desktop on Windows also binds [::]:8080
+    # but does not proxy it, and `localhost` resolves to ::1 first - so the
+    # connection hangs instead of failing over. With nothing on ::1 the client
+    # gets an instant refusal and falls back to 127.0.0.1. Verified on this
+    # machine: localhost timed out on every attempt before this change.
+    ports: ["127.0.0.1:${GATEWAY_PORT:-8080}:8080"]
+    environment:
+      GATEWAY_REDIS_URL: redis://redis:6379/0
+      GATEWAY_DATABASE_URL: postgresql://omnicare:omnicare@postgres:5432/omnicare
+      GATEWAY_RATE_LIMIT_PER_MINUTE: "30"
+      GATEWAY_MAX_QUEUE_DEPTH: "50"
+      GATEWAY_RUN_TIMEOUT_S: ${GATEWAY_RUN_TIMEOUT_S:-30}
+      GATEWAY_LIVEKIT_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      GATEWAY_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      GATEWAY_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-local-only-not-for-production}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_SERVICE_NAME: omnicare-gateway
+    depends_on:
+      redis: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8080/api/v1/health')"]
+      interval: 5s
+      retries: 20
+
+  livekit:
+    image: livekit/livekit-server:v1.8
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./infra/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      # IPv4-explicit for the same reason as the gateway: Docker Desktop binds
+      # [::] without proxying it and `localhost` resolves to ::1 first.
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "127.0.0.1:7882:7882/udp"
+
+  voice:
+    build:
+      context: ./backend
+      target: voice
+    environment:
+      VOICE_LIVEKIT_URL: ws://livekit:7880
+      VOICE_LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      VOICE_LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-local-only-not-for-production}
+      VOICE_REDIS_URL: redis://redis:6379/0
+      VOICE_STT_API_KEY: ${GROQ_API_KEY:-}
+      VOICE_TTS_API_KEY: ${GROQ_API_KEY:-}
+      # piper (local, default) or groq (better voice, needs a key and one-time
+      # terms acceptance at console.groq.com).
+      VOICE_TTS_PROVIDER: ${VOICE_TTS_PROVIDER:-piper}
+      VOICE_RUN_TIMEOUT_S: ${VOICE_RUN_TIMEOUT_S:-30}
+      OTEL_SERVICE_NAME: omnicare-voice
+    depends_on:
+      livekit: {condition: service_started}
+      redis: {condition: service_healthy}
+
+  frontend:
+    build: ./frontend
+    # Overridable: 3000 is a busy default (Node dev servers), and a port clash
+    # would otherwise be the first thing a reviewer meets.
+    ports: ["127.0.0.1:${FRONTEND_PORT:-3000}:80"]
+    environment:
+      # Injected into config.js at container start, so one image works against
+      # localhost in dev and any host in deployment without a rebuild.
+      API_BASE: ${API_BASE:-http://localhost:8080}
+    depends_on:
+      gateway: {condition: service_healthy}
+
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    profiles: [obs]
+    ports: ["127.0.0.1:6006:6006"]
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local]
+    volumes: [ollama:/root/.ollama]
+    ports: ["11434:11434"]
+
+volumes:
+  pgdata:
+  qdrant:
+  claims:
+  ollama:

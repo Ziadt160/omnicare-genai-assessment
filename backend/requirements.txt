@@ -1,0 +1,39 @@
+# Shared by every service. The base image installs this once and the four
+# service images layer on top (see Dockerfile.base).
+#
+# LangGraph is pinned to 1.x deliberately: agent/app/graph uses the 1.x API
+# (langgraph.types.interrupt, Command, InMemorySaver). The 0.2 line will not
+# import it.
+
+# --- web ---
+fastapi==0.135.*
+uvicorn[standard]==0.32.*
+websockets==13.*
+httpx==0.28.*
+
+# --- contracts and settings ---
+pydantic==2.12.*
+pydantic-settings==2.14.*
+PyYAML==6.*
+
+# --- agent ---
+langgraph==1.2.*
+langchain-core==1.4.*
+langchain-openai==1.3.*
+langgraph-checkpoint-postgres==3.0.*
+
+# --- retrieval: fastembed is ONNX, so no PyTorch. This single choice keeps
+#     the retrieval image around 400 MB instead of ~2.5 GB.
+fastembed==0.4.*
+qdrant-client==1.12.*
+
+# --- infrastructure ---
+redis==7.3.*
+psycopg[binary,pool]==3.2.*
+filelock==3.16.*
+tenacity==9.*
+
+# --- observability: vendor-neutral. The exporter target is one env var.
+opentelemetry-sdk==1.28.*
+opentelemetry-exporter-otlp-proto-http==1.28.*
+openinference-instrumentation-langchain==0.1.*

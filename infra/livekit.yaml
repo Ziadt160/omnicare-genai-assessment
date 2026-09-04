@@ -1,0 +1,26 @@
+# LiveKit local development config.
+#
+# The three settings that matter are node_ip, udp_port and tcp_port. By default
+# LiveKit advertises the CONTAINER internal IP in ICE candidates, which the
+# browser cannot reach - the room connects and there is simply no audio. That
+# is the highest-risk failure in this build; spike it on day 1 (spec section 8).
+
+port: 7880
+bind_addresses: ["0.0.0.0"]
+
+rtc:
+  tcp_port: 7881          # always works through published ports - the safety net
+  udp_port: 7882          # single-port mode; no wide UDP range to publish
+  use_external_ip: false
+  node_ip: 127.0.0.1      # browser and Docker share a host in local dev
+
+logging:
+  level: info
+
+# DEV ONLY, and documented as such in the README. A real deployment mints these
+# per environment and never commits them.
+keys:
+  # LiveKit 1.8+ rejects secrets under 32 characters. It logs an ERROR
+  # and starts anyway, so the failure surfaces later as tokens that will
+  # not validate - which is a confusing way to discover it.
+  devkey: devsecret-local-only-not-for-production
