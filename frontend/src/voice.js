@@ -122,11 +122,23 @@
   }
 
   function endTurn() {
-    // Drop a bubble that never received a word: a turn ending in a confirmation
-    // produces no tokens, and an empty card is worse than no card.
-    if (answerBubble && !answerBubble.textContent.trim()) {
-      const msg = answerBubble.closest(".msg");
-      if (msg) msg.remove();
+    /* Drop a bubble that received nothing at all: a turn can end without ever
+       producing a token, and an empty card is worse than no card.
+
+       "Nothing" means no text *and* no chips or citations. Testing the
+       paragraph alone was wrong in both directions - `decorate` attaches tool
+       chips and sources as siblings of it, so a turn that retrieved a section
+       but said nothing looked empty by that test and had its citations deleted
+       along with the card. */
+    if (answerBubble) {
+      const bubble = answerBubble.parentElement;
+      const bare =
+        !answerBubble.textContent.trim() &&
+        !(bubble && bubble.querySelector(".sources, .tools"));
+      if (bare) {
+        const msg = answerBubble.closest(".msg");
+        if (msg) msg.remove();
+      }
     }
     answerBubble = null;
   }

@@ -7,40 +7,55 @@
  */
 
 :root {
-  --ground: #f1f4f5;
-  --surface: #ffffff;
-  --surface-2: #e9edef;
-  --ink: #131a20;
-  --ink-2: #55646f;
-  --ink-3: #7e8d98;
-  --rule: #d7dee2;
-  --accent: #8a5a14;
-  --accent-soft: #f3e7d2;
-  --ok: #14653c;
-  --ok-soft: #deefe5;
-  --warn: #8a5a14;
-  --stop: #a01b2b;
-  --stop-soft: #f6e1e3;
-  --radius: 10px;
+  /* Warm paper and muted sage. The previous palette was cool grey under a
+     saturated amber, which reads as an alert even when nothing is wrong -
+     wrong for a surface whose job is to calm someone whose kitchen has just
+     flooded. Nothing here is fully saturated and nothing is pure white or
+     pure black; every neutral carries a little of the accent's green so the
+     page reads as one material rather than as grey with a colour on top.
+     Contrast is checked, not eyeballed: every text token clears 4.5:1 on both
+     the ground and the surface. */
+  --ground: #f2f1ec;
+  --surface: #fbfaf7;
+  --surface-2: #e8e6df;
+  --ink: #262b28;
+  --ink-2: #555c58;
+  --ink-3: #666d68;
+  --rule: #dbd8d0;
+  --accent: #5c7a68;
+  --accent-soft: #e2eae4;
+  --on-accent: #fbfaf7;
+  --ok: #456f56;
+  --ok-soft: #dfeae2;
+  --warn: #7d6437;
+  --stop: #94564e;
+  --stop-soft: #f0e2df;
+  --on-stop: #fbfaf7;
+  --radius: 12px;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #0e1418;
-    --surface: #161e24;
-    --surface-2: #1e282f;
-    --ink: #e4edf2;
-    --ink-2: #93a5b1;
-    --ink-3: #6e808c;
-    --rule: #26313a;
-    --accent: #d9a441;
-    --accent-soft: #2e2513;
-    --ok: #5fd69b;
-    --ok-soft: #12291f;
-    --warn: #d9a441;
-    --stop: #f08a93;
-    --stop-soft: #2b161a;
+    --ground: #151918;
+    --surface: #1c2120;
+    --surface-2: #252b29;
+    --ink: #e6e9e6;
+    --ink-2: #9aa39d;
+    --ink-3: #8b948e;
+    --rule: #2a3130;
+    --accent: #8fb49d;
+    --accent-soft: #1e2a24;
+    --on-accent: #151918;
+    --ok: #7cc79b;
+    --ok-soft: #17271f;
+    --warn: #cda96d;
+    /* Light enough to read on the dark ground, which means white text on it
+       fails - so the label colour is a token that flips with the theme rather
+       than a hard-coded #fff. */
+    --stop: #d39086;
+    --stop-soft: #2c1e1c;
+    --on-stop: #241a18;
   }
 }
 
@@ -89,7 +104,7 @@ body {
   width: 38px; height: 38px;
   border-radius: 8px;
   background: var(--accent);
-  color: var(--surface);
+  color: var(--on-accent);
   font: 600 13px/1 var(--mono);
   letter-spacing: .04em;
 }
@@ -158,7 +173,7 @@ main {
 .msg--user .bubble {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .msg--system .bubble {
   background: var(--stop-soft);
@@ -270,11 +285,11 @@ main {
 .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .btn--icon { display: grid; place-items: center; width: 42px; padding: 0; }
-.btn--live { background: var(--stop); border-color: var(--stop); color: #fff; }
+.btn--live { background: var(--stop); border-color: var(--stop); color: var(--on-stop); }
 
 /* ----------------------------------------------------------------- foot */
 
@@ -403,7 +418,7 @@ main {
 .btn--stop {
   background: var(--stop);
   border-color: var(--stop);
-  color: #fff;
+  color: var(--on-stop);
   padding: 11px 26px;
   font-weight: 600;
 }

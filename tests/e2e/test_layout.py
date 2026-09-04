@@ -142,3 +142,70 @@ def test_the_newest_message_is_the_one_you_can_see(page) -> None:
         }"""
     )
     assert visible, "the newest message is not in view"
+
+
+# ------------------------------------------------------------------ contrast
+
+CONTRAST_PAIRS = [
+    ("the conversation", ".bubble", "color", "backgroundColor"),
+    ("your own messages", ".msg--user .bubble", "color", "backgroundColor"),
+    ("the send button", "#send", "color", "backgroundColor"),
+    ("the citation file name", ".cite__file", "color", "backgroundColor"),
+]
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_text_is_readable_in_both_themes(browser, scheme: str) -> None:
+    """White text was hard-coded onto the accent and the stop colour.
+
+    That was already failing in dark mode before the palette changed - the old
+    dark accent was a light amber, so white on it measured about 1.9:1 - and it
+    is the kind of thing that is invisible to whoever built it, because they
+    are looking at the light theme.
+    """
+    page = browser.new_page(color_scheme=scheme,
+                            viewport={"width": 1000, "height": 700})
+    try:
+        page.goto(FRONTEND, wait_until="networkidle")
+        page.evaluate(
+            """() => {
+                window.OmniCare.addMessage('user', 'Is flood damage covered?');
+                window.OmniCare.addMessage('assistant', 'Covered up to $25,000.',
+                  {sources: ['sample_policy.md § Section 1: Home Water Damage Coverage']});
+            }"""
+        )
+        page.wait_for_timeout(200)
+
+        results = page.evaluate(
+            r"""pairs => {
+                const lum = (c) => {
+                    const [r, g, b] = c.match(/\d+/g).slice(0, 3).map(Number);
+                    const f = (v) => {
+                        v /= 255;
+                        return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+                    };
+                    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+                };
+                // Walk up for the nearest painted ancestor: a transparent
+                // background is the parent's, not black.
+                const bgOf = (el) => {
+                    for (let n = el; n; n = n.parentElement) {
+                        const c = getComputedStyle(n).backgroundColor;
+                        if (c && !c.startsWith('rgba(0, 0, 0, 0)')) return c;
+                    }
+                    return 'rgb(255,255,255)';
+                };
+                return pairs.map(([label, sel]) => {
+                    const el = document.querySelector(sel);
+                    if (!el) return [label, null];
+                    const a = lum(getComputedStyle(el).color), b = lum(bgOf(el));
+                    const [hi, lo] = a > b ? [a, b] : [b, a];
+                    return [label, (hi + 0.05) / (lo + 0.05)];
+                });
+            }""",
+            CONTRAST_PAIRS,
+        )
+        poor = [(label, round(r, 2)) for label, r in results if r is not None and r < 4.5]
+        assert not poor, f"unreadable in {scheme} mode: {poor}"
+    finally:
+        page.close()

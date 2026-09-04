@@ -453,3 +453,29 @@ def test_the_call_announces_itself_as_a_dialog(page) -> None:
         }"""
     )
     assert panel == ["dialog", "true"]
+
+
+def test_a_turn_that_only_found_sources_keeps_them(page) -> None:
+    """`endTurn` tested the paragraph alone, and `decorate` attaches citations
+    as its sibling - so a turn that retrieved a section but produced no text
+    looked empty and had its citations deleted along with the card."""
+    before = len(assistant_texts(page))
+    feed(page,
+         {"type": "sources", "sources": [CITATION]},
+         {"type": "state", "label": "listening", "kind": "ok"})
+
+    assert len(assistant_texts(page)) == before + 1, "the citations were thrown away"
+    cited = page.evaluate(
+        """() => [...document.querySelectorAll('.msg--assistant .bubble')].pop()
+                 .querySelector('.sources')?.innerText || ''"""
+    )
+    assert "Section 1" in cited
+
+
+def test_a_turn_that_produced_nothing_leaves_nothing(page) -> None:
+    """No text, no chips, no citations - no card."""
+    before = len(assistant_texts(page))
+    feed(page,
+         {"type": "answer_delta", "text": ""},
+         {"type": "state", "label": "listening", "kind": "ok"})
+    assert len(assistant_texts(page)) == before, "an empty card was left behind"
