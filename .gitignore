@@ -20,6 +20,8 @@ data/mock_claims.json.lock
 data/mock_claims.json.tmp
 .spike_token
 .spike_url
+.voice_token
+.voice_url
 
 # Editors / OS
 .vscode/

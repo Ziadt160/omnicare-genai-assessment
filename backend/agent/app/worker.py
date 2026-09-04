@@ -280,12 +280,26 @@ def build_worker(
         *build_claims_tools(repo, idempotency),
     ]
 
-    config = resolve(
-        settings.llm_provider,
-        settings.llm_model,
-        settings.llm_api_key,
-        settings.llm_base_url,
-    )
+    try:
+        config = resolve(
+            settings.llm_provider,
+            settings.llm_model,
+            settings.llm_api_key,
+            settings.llm_base_url,
+        )
+    except ValueError as exc:
+        # `docker compose up` on a fresh clone has no .env and therefore no key.
+        # Exiting there would mean the brief's "docker-compose up launches
+        # everything" is only true for someone who already has credentials, so
+        # fall back to the keyless demo provider instead - loudly, and with
+        # every answer it produces prefixed "(demo mode - no LLM configured)",
+        # so nobody can mistake it for the real model.
+        log.warning("%s", exc)
+        log.warning(
+            "falling back to the keyless demo provider. Put GROQ_API_KEY in .env "
+            "(or set LLM_PROVIDER=ollama) for real answers."
+        )
+        config = resolve("fake")
     primary = build_chat_model(config, timeout=settings.llm_timeout_s)
 
     fallback = None
