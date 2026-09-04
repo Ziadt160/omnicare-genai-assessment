@@ -34,6 +34,12 @@ filelock==3.16.*
 tenacity==9.*
 
 # --- observability: vendor-neutral. The exporter target is one env var.
-opentelemetry-sdk==1.28.*
-opentelemetry-exporter-otlp-proto-http==1.28.*
+# The range, rather than a pin: livekit-agents 1.7 requires opentelemetry-api
+# >=1.39,<1.45, and requirements-dev.txt installs both into one environment so
+# the voice shim's tests can run. Docker keeps them apart - voice builds in its
+# own stage - which is why this only ever surfaced in CI. Everything used here
+# (TracerProvider, Resource, BatchSpanProcessor, start_as_current_span) is
+# unchanged across the range.
+opentelemetry-sdk>=1.39,<1.45
+opentelemetry-exporter-otlp-proto-http>=1.39,<1.45
 openinference-instrumentation-langchain==0.1.*
