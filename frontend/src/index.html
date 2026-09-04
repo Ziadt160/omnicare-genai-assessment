@@ -75,6 +75,10 @@
               role="img" aria-label="Voice activity"></canvas>
       <p id="voice-phase" class="voice__phase" aria-live="polite">Listening</p>
       <p id="voice-caption" class="voice__caption"></p>
+      <!-- Tool chips and citations for the turn being spoken. The call
+           surface is opaque, so anything written only into the thread is
+           invisible for exactly as long as the caller is listening. -->
+      <div id="voice-meta" class="voice__meta"></div>
     </div>
 
     <div class="voice__actions">

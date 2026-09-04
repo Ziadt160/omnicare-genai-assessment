@@ -202,6 +202,14 @@ A call takes the whole screen. There is nothing to read on one and exactly one
 thing to look at, and a 190px orb wedged under the transcript said "widget" for
 what is the entire foreground task.
 
+The tool that ran and the section it returned are shown **on the call**, not
+only in the thread. Making the call full-screen put the transcript behind an
+opaque surface, so citations landing there and nowhere else were invisible for
+exactly as long as the caller was listening to the answer they justify - and a
+coverage answer you cannot check is the thing this whole system is built to
+avoid. They are written to both places: the call, so they can be seen now, and
+the conversation, so they survive the call.
+
 The orb is driven by an `AnalyserNode` on the real audio — the microphone track
 while the caller speaks, the agent's subscribed track while it answers — not by
 a timer. That is the point of it: a decorative animation looks identical whether
@@ -376,7 +384,7 @@ a dashboard.
 
 ```bash
 make test        # 292 in-process, no container, no network
-pytest tests/e2e -m e2e   # 57 against the running stack
+pytest tests/e2e -m e2e   # 63 against the running stack
 make eval        # the behavioural gate
 ```
 
@@ -384,7 +392,7 @@ make eval        # the behavioural gate
 |---|---:|
 | `tests/unit` | 214 |
 | `tests/contract` | 47 |
-| `tests/e2e` | 57 |
+| `tests/e2e` | 63 |
 | `evals` | 31 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·

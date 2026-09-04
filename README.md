@@ -8,7 +8,7 @@ looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **349 tests pass**, including **57 end-to-end against the live containers**;
+> **355 tests pass**, including **63 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -243,7 +243,7 @@ All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
 (gate 0.90) · tool-argument match 1.00 (gate 0.95).
 
-**Against the running stack — 57 tests, `pytest tests/e2e -m e2e`:**
+**Against the running stack — 63 tests, `pytest tests/e2e -m e2e`:**
 
 Confirmed live: the graded health body; RAG answering with a real section
 citation; the exclusion stated plainly; a claim looked up from the seeded
@@ -420,7 +420,7 @@ doing so rather than trusting a green in-process suite:
 
 `git clone` then `docker compose up --build`, with no `.env` and no key: eight
 containers, the frontend on :3000, the graded health body, and coverage answers
-with real citations from real embeddings. Then `pytest` — 349 pass, and the e2e
+with real citations from real embeddings. Then `pytest` — 355 pass, and the e2e
 tests skip rather than fail when no stack is running. A GitHub Actions workflow
 (`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
 up` proving the graded contract with no credentials.

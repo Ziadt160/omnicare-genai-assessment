@@ -479,3 +479,98 @@ def test_a_turn_that_produced_nothing_leaves_nothing(page) -> None:
          {"type": "answer_delta", "text": ""},
          {"type": "state", "label": "listening", "kind": "ok"})
     assert len(assistant_texts(page)) == before, "an empty card was left behind"
+
+
+# ------------------------------------------- what the caller can see on a call
+
+def test_the_citation_is_visible_during_the_call(page) -> None:
+    """The call surface is opaque and full-screen, so anything written into the
+    thread is behind it. Citations landing there and nowhere else meant the one
+    signal that makes a coverage answer trustworthy was invisible for exactly
+    as long as the caller was listening to that answer.
+    """
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    feed(page,
+         {"type": "answer_delta", "text": "Covered up to $25,000."},
+         {"type": "sources", "sources": [CITATION]})
+    page.wait_for_timeout(150)
+
+    on_call = page.evaluate(
+        "() => document.getElementById('voice-meta').innerText"
+    )
+    assert "Section 1: Home Water Damage Coverage" in on_call
+
+    # And still in the thread, for reading back afterwards.
+    page.evaluate("() => window.OmniCareVoice.minimiseCall()")
+    assert "Section 1" in page.evaluate(
+        """() => [...document.querySelectorAll('.msg--assistant .bubble')].pop()
+                 .querySelector('.sources')?.innerText || ''"""
+    )
+
+
+def test_the_tool_is_visible_during_the_call(page) -> None:
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    feed(page, {"type": "tool", "name": "get_claim_status", "status": "ok"})
+    page.wait_for_timeout(150)
+
+    assert "get_claim_status" in page.evaluate(
+        "() => document.getElementById('voice-meta').innerText"
+    )
+
+
+def test_each_turn_starts_from_a_clean_slate(page) -> None:
+    """Otherwise the previous answer's citation sits under the next question,
+    which is worse than showing none: it attributes an answer to a section that
+    was not consulted for it."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    feed(page,
+         {"type": "answer_delta", "text": "Covered."},
+         {"type": "sources", "sources": [CITATION]},
+         {"type": "state", "label": "listening", "kind": "ok"})
+    feed(page, {"type": "transcript_final", "text": "What about my claim?"})
+    page.wait_for_timeout(150)
+
+    assert page.evaluate(
+        "() => document.getElementById('voice-meta').innerText.trim()"
+    ) == "", "the previous turn's citation is still on screen"
+
+
+def test_the_phase_line_is_written_for_a_person(page) -> None:
+    """`search_policy_documents` is the function's name, not a status a
+    policyholder should be shown mid-call."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    feed(page, {"type": "state", "label": "search_policy_documents", "kind": "busy"})
+    page.wait_for_timeout(120)
+
+    phase = page.evaluate("() => document.getElementById('voice-phase').innerText")
+    assert "_" not in phase, f"raw identifier shown to the caller: {phase!r}"
+    assert phase.lower().startswith("checking"), phase
+
+
+def test_a_restated_citation_is_not_shown_twice(page) -> None:
+    """`sources` describes the whole turn, so a second event is a restatement
+    rather than an addition - appending it puts the same section on screen
+    twice under one answer, which reads as two independent confirmations."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    feed(page,
+         {"type": "sources", "sources": [CITATION]},
+         {"type": "answer_delta", "text": "Covered."},
+         {"type": "sources", "sources": [CITATION]})
+    page.wait_for_timeout(150)
+
+    blocks = page.evaluate(
+        "() => document.querySelectorAll('#voice-meta .sources').length"
+    )
+    assert blocks == 1, f"the citation is on screen {blocks} times"
+
+
+def test_two_tools_are_both_shown(page) -> None:
+    """Chips do stack: two tools running is two facts about the turn."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    feed(page,
+         {"type": "tool", "name": "search_policy_documents", "status": "ok"},
+         {"type": "tool", "name": "get_claim_status", "status": "ok"})
+    page.wait_for_timeout(150)
+
+    text = page.evaluate("() => document.getElementById('voice-meta').innerText")
+    assert "search_policy_documents" in text and "get_claim_status" in text

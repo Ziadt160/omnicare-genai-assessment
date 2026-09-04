@@ -463,3 +463,30 @@ main {
 @media (prefers-reduced-motion: reduce) {
   .voice-return__dot { animation: none; }
 }
+
+/* What the spoken answer rests on, shown on the call itself. Citations are the
+   one thing that makes a coverage answer checkable, and putting them only in
+   the thread hid them behind the very surface the caller is looking at. */
+.voice__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 54px;
+  max-width: 44ch;
+}
+
+/* Order by meaning, not by arrival: the tool ran and then produced the
+   citation, so it reads above it whichever event landed first. */
+.voice__meta .tools { margin: 0; justify-content: center; order: 1; }
+.voice__meta .sources { order: 2; }
+
+.voice__meta .sources {
+  margin: 0;
+  order: 2;
+  padding: 9px 14px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: center;
+}
