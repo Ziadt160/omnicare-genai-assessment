@@ -8,7 +8,7 @@ looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **271 tests pass**, including **26 end-to-end against the live containers**;
+> **294 tests pass**, including **35 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -231,19 +231,19 @@ change the shape of a file we were told to append to.
 
 ## Verification
 
-**In-process — 245 tests, no container, no network:**
+**In-process — 259 tests, no container, no network:**
 
 | Layer | Count | Covers |
 |---|---:|---|
-| `tests/unit` | 177 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
-| `tests/contract` | 37 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
+| `tests/unit` | 181 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
+| `tests/contract` | 47 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
 | `evals` | 31 | 29 behavioural cases plus the aggregate gate |
 
 All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
 (gate 0.90) · tool-argument match 1.00 (gate 0.95).
 
-**Against the running stack — 26 tests, `pytest tests/e2e -m e2e`:**
+**Against the running stack — 35 tests, `pytest tests/e2e -m e2e`:**
 
 Confirmed live: the graded health body; RAG answering with a real section
 citation; the exclusion stated plainly; a claim looked up from the seeded
@@ -420,7 +420,7 @@ doing so rather than trusting a green in-process suite:
 
 `git clone` then `docker compose up --build`, with no `.env` and no key: eight
 containers, the frontend on :3000, the graded health body, and coverage answers
-with real citations from real embeddings. Then `pytest` — 271 pass, and the e2e
+with real citations from real embeddings. Then `pytest` — 294 pass, and the e2e
 tests skip rather than fail when no stack is running. A GitHub Actions workflow
 (`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
 up` proving the graded contract with no credentials.
@@ -440,6 +440,18 @@ routes turns through the same `jobs:chat` queue as chat, and **publishes a
 synthesised audio track** — LiveKit's own log shows
 `participant: agent-AJ_cJsUqmTgJwti`. Speech is local: Piper, a 63 MB voice
 baked into the image, no key and no quota.
+
+**One conversation, two channels.** The room name carries the conversation id,
+so a call and a typed conversation are the same thread: type, press the mic,
+and the assistant already knows what was said — and a confirmation paused in
+chat can be resumed by voice. The agent keys its memory on `conversation_id`,
+so this is the difference between one memory and two.
+
+**A call leaves a readable record.** Every spoken word is streamed to the
+transcript as it is said, alongside the caller's own words, the tool chips and
+the citations. Previously only the caller's half was shown: hang up and there
+was nothing to re-read, and a policyholder who misheard a deductible had no way
+to check it. See [the walkthrough](docs/walkthrough.md#voice-what-a-call-looks-like).
 
 **Still not verified:**
 

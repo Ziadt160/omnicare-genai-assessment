@@ -353,4 +353,22 @@ async function probeHealth(attempts = 3) {
   connect();
 })();
 
-window.OmniCare = { send, addMessage, setStatus, USER_ID, API };
+/* `conversation` is exposed as an accessor pair rather than a value: voice and
+   chat must share one conversation id, and whichever channel speaks first mints
+   it. A plain copy handed over at load time would be null forever. */
+window.OmniCare = {
+  send,
+  addMessage,
+  renderText,
+  renderSources,
+  renderToolCalls,
+  setStatus,
+  USER_ID,
+  API,
+  get conversationId() {
+    return conversationId;
+  },
+  set conversationId(value) {
+    if (value) conversationId = value;
+  },
+};

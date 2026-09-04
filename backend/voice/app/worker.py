@@ -22,7 +22,7 @@ import json
 import logging
 from typing import Any
 
-from libs.contracts import RunEvent
+from libs.contracts import RunEvent, conversation_id_from_room
 from libs.guardrails.normalize import normalize_claim_id, normalize_policy_number
 from .settings import VoiceSettings
 
@@ -65,11 +65,14 @@ def normalize_transcript(text: str) -> str:
 
 
 def browser_message(event: RunEvent) -> dict[str, Any] | None:
-    """The screen half of an event, or None if it is audio-only.
+    """The screen half of an event, or None if there is nothing to show.
 
-    Citations are shown, never spoken: reading "sample_policy.md section 1" aloud
-    is noise, but a policyholder should still be able to see which section the
-    answer came from. Same reasoning for queue position and tool activity.
+    Spoken and shown are not alternatives. Citations are shown and never spoken -
+    reading "sample_policy.md section 1" aloud is noise - and queue position and
+    tool activity are the same. But the answer itself is **both**: a call used to
+    leave no readable record of what the assistant said, so hanging up left
+    nothing to re-read and a policyholder who misheard a deductible had no way to
+    check it.
     """
     if event.type == "queued":
         position = int(event.payload.get("position", 0) or 0)
@@ -82,9 +85,17 @@ def browser_message(event: RunEvent) -> dict[str, Any] | None:
     if event.type == "tool_end":
         return {"type": "tool", "name": str(event.payload.get("name", "")),
                 "status": str(event.payload.get("status", "ok"))}
+    if event.type == "token":
+        # The same text the TTS is speaking, streamed to the transcript so the
+        # two stay in step. Empty deltas are dropped rather than published.
+        text = str(event.payload.get("text", ""))
+        return {"type": "answer_delta", "text": text} if text else None
     if event.type == "sources":
+        # Deliberately carries no `text`. This was published as an `answer` with
+        # an empty string, which the browser rendered as a *new* assistant
+        # bubble - detaching the citations from the answer they belonged to.
         sources = list(event.payload.get("sources", []))
-        return {"type": "answer", "text": "", "sources": sources} if sources else None
+        return {"type": "sources", "sources": sources} if sources else None
     if event.type == "confirm":
         return {"type": "confirm", "readback": str(event.payload.get("readback", "")),
                 "args": event.payload.get("args", {})}
@@ -189,8 +200,12 @@ async def entrypoint(ctx: Any) -> None:
 
     participant = await ctx.wait_for_participant()
     user_id = participant.identity or "voice-user"
-    conversation_id = ctx.room.name
-    log.info("serving room %s for %s", conversation_id, user_id)
+    # The room name is the only thing a dispatched worker is told, so the
+    # gateway puts the conversation id inside it. Unwrapping it here is what
+    # makes a call and a typed conversation one thread rather than two.
+    conversation_id = conversation_id_from_room(ctx.room.name)
+    log.info("serving room %s as conversation %s for %s",
+             ctx.room.name, conversation_id, user_id)
 
     queue = RedisQueue(settings.redis_url)
 

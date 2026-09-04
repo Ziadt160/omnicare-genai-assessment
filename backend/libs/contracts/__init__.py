@@ -17,7 +17,12 @@ from .claims import (
 )
 from .events import RunEvent, RunEventType
 from .retrieval import Chunk, SearchPolicyArgs, SearchResult
-from .voice import VoiceTokenRequest, VoiceTokenResponse
+from .voice import (
+    VoiceTokenRequest,
+    VoiceTokenResponse,
+    conversation_id_from_room,
+    room_for,
+)
 
 __all__ = [
     "Channel", "ChatRequest", "ChatResponse", "DeepHealthResponse", "HealthResponse",
@@ -26,4 +31,6 @@ __all__ = [
     "RunEvent", "RunEventType",
     "Chunk", "SearchPolicyArgs", "SearchResult",
     "VoiceTokenRequest", "VoiceTokenResponse",
+    "conversation_id_from_room",
+    "room_for",
 ]

@@ -6,24 +6,47 @@
  * compose profile, and it is what protects a reviewer's first run on a machine
  * where WebRTC through Docker misbehaves.
  *
- * The live transcript is rendered into the DOM as it arrives over the LiveKit
- * data channel. Visual confirmation of what was heard costs nothing and
- * consumes no conversational turn - see docs/adr/0007.
+ * Two things arrive over the LiveKit data channel and are rendered into the
+ * same thread as typed messages:
+ *
+ *   - the caller's transcript, so they can see what was heard. Visual
+ *     confirmation costs nothing and consumes no conversational turn - see
+ *     docs/adr/0007.
+ *   - the assistant's own words, streamed as they are spoken. A call used to
+ *     leave no readable record of the answer: hang up and there was nothing to
+ *     re-read, and a policyholder who misheard a deductible had no way to check
+ *     it. Spoken and shown are not alternatives.
+ *
+ * The room carries the conversation id, so a call and a typed conversation are
+ * one thread. Type, then press the mic, and the assistant already knows what
+ * was said; a confirmation paused in chat can be resumed by voice.
  */
 
 (function () {
   const API = window.OmniCare.API;
   const mic = document.getElementById("mic");
   const state = document.getElementById("voice-state");
+  const panel = document.getElementById("voice-panel");
+  const canvas = document.getElementById("voice-orb");
+  const caption = document.getElementById("voice-caption");
+  const phase = document.getElementById("voice-phase");
+  const hangup = document.getElementById("voice-hangup");
 
   let room = null;
   let connected = false;
   let transcriptBubble = null;
+  let answerBubble = null;   // the assistant bubble currently being spoken into
+  let orb = null;
 
   function setVoiceState(text, kind) {
     state.hidden = false;
     state.textContent = text;
     state.className = "pill pill--" + kind;
+  }
+
+  function setPhase(label, orbState) {
+    if (phase) phase.textContent = label;
+    if (orb && orbState) orb.setState(orbState);
   }
 
   function disableVoice(reason) {
@@ -55,6 +78,103 @@
     }
   }
 
+  /* ------------------------------------------------------------ transcript */
+
+  /* The assistant's reply, accumulated across deltas.
+
+     Raw text is kept on the element and re-rendered rather than appended as
+     HTML, for the same reason as the streaming chat path: a bold marker or a
+     citation bracket can straddle two deltas, and appending markup would commit
+     to a parse before the rest of the token arrived. */
+  function appendAnswer(text) {
+    if (!answerBubble) {
+      answerBubble = window.OmniCare.addMessage("assistant", "");
+      answerBubble.dataset.raw = "";
+    }
+    answerBubble.dataset.raw += text;
+    answerBubble.innerHTML = window.OmniCare.renderText(answerBubble.dataset.raw);
+  }
+
+  /* Attach citations or tool chips to the reply they belong to. */
+  function decorate(node) {
+    if (!answerBubble) {
+      answerBubble = window.OmniCare.addMessage("assistant", "");
+      answerBubble.dataset.raw = "";
+    }
+    answerBubble.parentElement.appendChild(node);
+  }
+
+  function endTurn() {
+    // Drop a bubble that never received a word: a turn ending in a confirmation
+    // produces no tokens, and an empty card is worse than no card.
+    if (answerBubble && !answerBubble.textContent.trim()) {
+      const msg = answerBubble.closest(".msg");
+      if (msg) msg.remove();
+    }
+    answerBubble = null;
+  }
+
+  function handleData(msg) {
+    if (msg.type === "transcript_partial") {
+      setPhase("Listening", "listening");
+      if (caption) caption.textContent = msg.text;
+      if (!transcriptBubble) {
+        transcriptBubble = window.OmniCare.addMessage("user", msg.text);
+        transcriptBubble.parentElement.classList.add("bubble--pending");
+      } else {
+        transcriptBubble.textContent = msg.text;
+      }
+    } else if (msg.type === "transcript_final") {
+      if (caption) caption.textContent = msg.text;
+      if (transcriptBubble) {
+        transcriptBubble.textContent = msg.text;
+        transcriptBubble.parentElement.classList.remove("bubble--pending");
+        transcriptBubble = null;
+      } else if (msg.text) {
+        window.OmniCare.addMessage("user", msg.text);
+      }
+      // The caller has stopped; the agent has the turn now.
+      setPhase("Working", "thinking");
+    } else if (msg.type === "answer_delta") {
+      setPhase("Speaking", "speaking");
+      if (caption) caption.textContent = "";
+      appendAnswer(msg.text);
+    } else if (msg.type === "sources") {
+      decorate(window.OmniCare.renderSources(msg.sources || []));
+    } else if (msg.type === "tool") {
+      decorate(window.OmniCare.renderToolCalls([msg]));
+    } else if (msg.type === "confirm") {
+      // Spoken readback is handled by TTS; the panel mirrors it visually so the
+      // policyholder can check the digits by eye as well as by ear - and it goes
+      // into the thread, because it is what the assistant said. A turn that ends
+      // in a confirmation emits no tokens at all, so there is usually no bubble
+      // yet; `appendAnswer` opens one.
+      if (!answerBubble || !answerBubble.textContent.trim()) {
+        appendAnswer(msg.readback || "");
+      }
+      endTurn();
+      document.getElementById("confirm-text").textContent = msg.readback;
+      document.getElementById("confirm").hidden = false;
+      setPhase("Awaiting confirmation", "thinking");
+    } else if (msg.type === "state") {
+      setVoiceState(msg.label, msg.kind || "busy");
+      if (msg.label === "listening") {
+        endTurn();
+        setPhase("Listening", "listening");
+      } else {
+        setPhase(msg.label, "thinking");
+      }
+    }
+  }
+
+  /* ----------------------------------------------------------- connection */
+
+  function showPanel(on) {
+    if (!panel) return;
+    panel.hidden = !on;
+    document.body.classList.toggle("voice-live", on);
+  }
+
   async function start() {
     mic.disabled = true;
     setVoiceState("connecting", "busy");
@@ -64,12 +184,21 @@
       credentials = await fetch(`${API}/api/v1/voice/token`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: window.OmniCare.USER_ID }),
+        body: JSON.stringify({
+          user_id: window.OmniCare.USER_ID,
+          // Continue the conversation already on screen rather than opening a
+          // second one the assistant has no memory of.
+          conversation_id: window.OmniCare.conversationId || undefined,
+        }),
       }).then((r) => r.json());
     } catch {
       disableVoice("Could not obtain a voice token — chat works normally.");
       return;
     }
+
+    // Adopt the id the gateway minted, so typed turns after the call land on
+    // the same thread the call used.
+    window.OmniCare.conversationId = credentials.conversation_id;
 
     room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
 
@@ -83,14 +212,20 @@
       mic.disabled = false;
       mic.classList.remove("btn--live");
       setVoiceState("voice off", "idle");
+      showPanel(false);
+      if (orb) orb.stop();
+      endTurn();
     });
 
-    /* The agent's spoken reply. */
+    /* The agent's spoken reply: played by the attached element, and analysed by
+       the orb so the animation is driven by real audio rather than a timer. */
     room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
-      if (track.kind === "audio") document.body.appendChild(track.attach());
+      if (track.kind !== "audio") return;
+      document.body.appendChild(track.attach());
+      if (orb) orb.attach(track.mediaStreamTrack, "agent");
     });
 
-    /* Transcripts, citations and queue position arrive on the data channel so
+    /* Transcripts, the answer, citations and queue position all arrive here so
        the chat pane stays in sync with what is being spoken. */
     room.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
       let msg;
@@ -99,35 +234,7 @@
       } catch {
         return;
       }
-
-      if (msg.type === "transcript_partial") {
-        if (!transcriptBubble) {
-          transcriptBubble = window.OmniCare.addMessage("user", msg.text);
-          transcriptBubble.parentElement.classList.add("bubble--pending");
-        } else {
-          transcriptBubble.textContent = msg.text;
-        }
-      } else if (msg.type === "transcript_final") {
-        if (transcriptBubble) {
-          transcriptBubble.textContent = msg.text;
-          transcriptBubble.parentElement.classList.remove("bubble--pending");
-          transcriptBubble = null;
-        } else {
-          window.OmniCare.addMessage("user", msg.text);
-        }
-      } else if (msg.type === "answer") {
-        window.OmniCare.addMessage("assistant", msg.text, {
-          sources: msg.sources || [],
-          toolCalls: msg.tool_calls || [],
-        });
-      } else if (msg.type === "confirm") {
-        // Spoken readback is handled by TTS; the panel mirrors it visually so
-        // the policyholder can check the digits by eye as well as by ear.
-        document.getElementById("confirm-text").textContent = msg.readback;
-        document.getElementById("confirm").hidden = false;
-      } else if (msg.type === "state") {
-        setVoiceState(msg.label, msg.kind || "busy");
-      }
+      handleData(msg);
     });
 
     try {
@@ -137,7 +244,20 @@
       mic.disabled = false;
       mic.classList.add("btn--live");
       mic.title = "Stop voice";
-    } catch (err) {
+
+      if (canvas && window.OmniCareOrb) {
+        orb = orb || new window.OmniCareOrb(canvas);
+        const pub = room.localParticipant.getTrackPublication(
+          LivekitClient.Track.Source.Microphone
+        );
+        const micTrack = pub && pub.track && pub.track.mediaStreamTrack;
+        if (micTrack) orb.attach(micTrack, "mic");
+        orb.setState("listening");
+        orb.start();
+      }
+      showPanel(true);
+      setPhase("Listening", "listening");
+    } catch {
       disableVoice("Voice could not connect — chat works normally.");
       window.OmniCare.addMessage(
         "system",
@@ -153,6 +273,14 @@
   }
 
   mic.addEventListener("click", () => (connected ? stop() : start()));
+  if (hangup) hangup.addEventListener("click", () => stop());
+
+  /* Exposed for the browser tests. The data-channel message set is the entire
+     contract between the voice worker and this file, and the only honest way to
+     check that a spoken answer reaches the transcript is to feed the real
+     messages to the real handler in a real browser. Driving it through an actual
+     call would need a microphone and an SFU to assert on a DOM node. */
+  window.OmniCareVoice = { handleData, endTurn };
 
   probe();
 })();
