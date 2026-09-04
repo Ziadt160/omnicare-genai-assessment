@@ -14,18 +14,42 @@ download.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parents[1] / "docs" / "images"
-FRONTEND = "http://127.0.0.1:3100"
+FRONTEND = os.environ.get("FRONTEND_URL", "http://127.0.0.1:3000")
 VIEWPORT = {"width": 1100, "height": 780}
 
 
-async def send(page, text: str, wait_ms: int = 14_000) -> None:
-    """Drive the app's own submit path and wait for the reply to render."""
+async def send(page, text: str, timeout_ms: int = 180_000) -> None:
+    """Drive the app's own submit path and wait for the reply to actually land.
+
+    Waits on the DOM rather than sleeping a fixed interval: against a
+    rate-limited free tier a turn can legitimately take a minute while the
+    egress limiter holds for the token window to clear, and a fixed 14 s
+    screenshotted a half-finished page.
+    """
+    before = await page.locator(".msg--assistant").count()
     await page.fill("#input", text)
     await page.press("#input", "Enter")
-    await page.wait_for_timeout(wait_ms)
+
+    # A new assistant bubble *with content in it*. Counting bubbles alone is
+    # not enough: on the WebSocket path the `started` event opens an empty one
+    # to stream tokens into, so a count-based wait returns before the answer
+    # exists and screenshots a blank card.
+    await page.wait_for_function(
+        """([before]) => {
+            const msgs = document.querySelectorAll('.msg--assistant');
+            if (msgs.length <= before) return false;
+            const last = msgs[msgs.length - 1];
+            const panel = document.getElementById('confirm');
+            return last.innerText.trim().length > 0 || (panel && !panel.hidden);
+        }""",
+        arg=[before],
+        timeout=timeout_ms,
+    )
+    await page.wait_for_timeout(1_500)
 
 
 async def fresh(page) -> None:
@@ -87,14 +111,26 @@ async def main() -> int:
         )
         await shot("07-confirm-prompt.png", "Irreversible write paused for confirmation")
 
+        await page.wait_for_selector("#confirm:not([hidden])", timeout=180_000)
+        before = await page.locator(".msg--assistant").count()
         await page.click("#confirm-yes")
-        await page.wait_for_timeout(14_000)
+        await page.wait_for_function(
+            f"document.querySelectorAll('.msg--assistant').length > {before}",
+            timeout=180_000,
+        )
+        await page.wait_for_timeout(1_200)
         await shot("08-claim-filed.png", "Claim filed after confirmation")
 
         await fresh(page)
         await send(page, "File a water damage claim on POL-3341 for $400 - minor leak.")
+        await page.wait_for_selector("#confirm:not([hidden])", timeout=180_000)
+        before = await page.locator(".msg--assistant").count()
         await page.click("#confirm-no")
-        await page.wait_for_timeout(12_000)
+        await page.wait_for_function(
+            f"document.querySelectorAll('.msg--assistant').length > {before}",
+            timeout=180_000,
+        )
+        await page.wait_for_timeout(1_200)
         await shot("09-declined.png", "Declining writes nothing")
 
         await browser.close()

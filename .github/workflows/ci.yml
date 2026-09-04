@@ -1,0 +1,82 @@
+# Runs the parts of the suite that need nothing but Python.
+#
+# Deliberately not the live evals: those need a provider key, and a free tier's
+# daily quota is not a stable CI dependency - a gate that goes red because
+# someone else used the tokens teaches nothing. `evals/test_gates.py` runs here
+# because it scripts the model's decisions with FakeLLM and therefore measures
+# the graph, which is the part that must never regress.
+#
+# The e2e suite skips itself when no stack is reachable, so it is safe to
+# include; the compose job below actually gives it one.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  tests:
+    name: unit · contract · evals
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check backend/ tests/ evals/ scripts/
+
+      - name: Tests
+        run: pytest -m "not live" -q
+
+  compose:
+    name: docker compose up, no credentials
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The claim the README makes: a clean clone with no .env answers.
+      - name: Build and start
+        run: docker compose up -d --build
+
+      - name: Wait for the gateway
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/api/v1/health >/dev/null 2>&1; then
+              echo "gateway healthy"; exit 0
+            fi
+            sleep 5
+          done
+          echo "gateway never became healthy"; docker compose logs --tail 60; exit 1
+
+      - name: The graded contract
+        run: |
+          test "$(curl -fsS http://localhost:8080/api/v1/health)" = '{"status":"healthy"}'
+          curl -fsS -X POST http://localhost:8080/api/v1/chat \
+            -H 'Content-Type: application/json' \
+            -d '{"user_id":"ci","message":"A pipe burst in my kitchen. Am I covered?"}' \
+            | tee /dev/stderr | grep -q 'Home Water Damage Coverage'
+          # extra="forbid" means an unknown key is a 422, not a silent drop
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            http://localhost:8080/api/v1/chat -H 'Content-Type: application/json' \
+            -d '{"user_id":"ci","message":"hi","admin":true}')" = "422"
+
+      - name: End-to-end against the running stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pytest tests/e2e -m e2e -q
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail 120
