@@ -10,6 +10,7 @@ cleverly worded message.
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, SystemMessage
@@ -20,6 +21,7 @@ from libs.guardrails.normalize import (
     normalize_claim_id,
     normalize_policy_number,
     phonetic_readback,
+    spoken_amounts,
 )
 from .state import AgentState
 
@@ -210,6 +212,28 @@ def _policy_numbers_stated(messages: list[Any]) -> set[str]:
     return stated
 
 
+def _amount_was_stated(amount: Any, messages: list[Any]) -> bool:
+    """Whether the policyholder actually gave this figure.
+
+    Compared in whole dollars, because that is the granularity people speak in
+    and the cents are the model's formatting: "twelve hundred dollars" and
+    "$1,200" and "1200.00" are the same claim. `spoken_amounts` reads both the
+    written and the spoken form, so a voice claim is not refused for an amount
+    the caller said out loud.
+    """
+    try:
+        want = int(Decimal(str(amount)))
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+
+    for message in messages:
+        if getattr(message, "type", None) != "human":
+            continue
+        if want in spoken_amounts(str(message.content)):
+            return True
+    return False
+
+
 def make_confirm_node(require_confirmation: bool = True):
     """Layer 4: nothing irreversible happens without an explicit yes.
 
@@ -241,14 +265,35 @@ def make_confirm_node(require_confirmation: bool = True):
                 "messages": [
                     AIMessage(
                         content="Before I can file this, I need your policy "
-                        "number - the one on your policy documents, in the form "
-                        "POL-1092. I don't have one from you yet, and I won't "
-                        "file a claim against a number I guessed."
+                        "number - the letters POL, a hyphen and four digits, "
+                        "from your policy documents. I don't have one from you "
+                        "yet, and I won't file a claim against a number I "
+                        "guessed."
                     )
                 ],
             }
 
+        # The amount, for the same reason and with more at stake: it becomes a
+        # permanent financial record. Observed live - told only that "my
+        # playstation, my watch and my drawer" were stolen, the model wrote
+        # "Since we don't have specific values ... I will provide an estimated
+        # total amount", put $1,000 on the claim, and moved to file it. Rule 6
+        # forbids estimating; the model estimated anyway.
         amount = pending.get("amount")
+        if amount is not None and not _amount_was_stated(
+            amount, state.get("messages", [])
+        ):
+            return {
+                "pending_write": None,
+                "messages": [
+                    AIMessage(
+                        content="I can't file this yet: I don't have an amount "
+                        "from you, and I won't put an estimate on a claim. How "
+                        "much are you claiming? A total figure is enough."
+                    )
+                ],
+            }
+
         readback = (
             f"I'm about to file a {pending.get('claim_type')} claim on policy "
             f"{phonetic_readback(str(pending.get('policy_number', '')))} "

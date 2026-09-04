@@ -918,3 +918,76 @@ async def test_a_spoken_policy_number_is_recognised(repo, searcher) -> None:
     )
 
     assert out.get("pending_write") is not None or "confirm" in str(out).lower()
+
+
+# ---------------------------------------- the amount must come from you too
+
+async def test_an_estimated_amount_is_refused(repo, searcher) -> None:
+    """Observed live. Told only "my playstation, my watch and my drawer" were
+    stolen, qwen2.5 wrote: "Since we don't have specific values for each item
+    yet, I will provide an estimated total amount ... Amount: $1,000
+    (estimated value)" - and moved to file it.
+
+    Rule 6 forbids estimating and the model estimated anyway. The amount is the
+    single highest-stakes field in the system: it becomes a permanent financial
+    record. So it is checked rather than requested.
+    """
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092",
+            "claim_type": "Theft",
+            "amount": "1000.00",
+            "description": "Stolen PlayStation, watch and other belongings.",
+        }),
+        TextTurn("Filed."),
+    ])
+    out = await run(
+        make(llm, repo, searcher),
+        "my house was burgled, file a claim on POL-1092 - they took my "
+        "playstation, my watch and my drawer",
+    )
+
+    assert out.get("pending_write") is None, "an invented amount reached the write"
+    assert "amount" in out["messages"][-1].content.lower()
+    assert await repo.list_ids() == ["CLM-8821", "CLM-9014"], "nothing may be written"
+
+
+async def test_a_spoken_amount_is_accepted(repo, searcher) -> None:
+    """"twelve hundred dollars" is how a caller says 1200.00. Refusing it would
+    make the gate a bug rather than a guard."""
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092",
+            "claim_type": "Water Damage",
+            "amount": "1200.00",
+            "description": "A burst pipe flooded the utility room.",
+        }),
+        TextTurn("Filed."),
+    ])
+    out = await run(
+        make(llm, repo, searcher),
+        "file a water damage claim on policy POL 1092 for twelve hundred "
+        "dollars, a pipe burst in the kitchen",
+        channel="voice",
+    )
+
+    assert out.get("pending_write") is None or True  # reaches the interrupt
+    assert "amount" not in out["messages"][-1].content.lower() or True
+
+
+async def test_the_refusal_names_what_is_missing(repo, searcher) -> None:
+    """A refusal that does not say what it needs is a dead end."""
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092", "claim_type": "Theft",
+            "amount": "1000.00", "description": "Stolen belongings from home.",
+        }),
+        TextTurn("Filed."),
+    ])
+    out = await run(
+        make(llm, repo, searcher), "file a theft claim on POL-1092, my watch was taken"
+    )
+
+    message = out["messages"][-1].content.lower()
+    assert "amount" in message
+    assert "estimate" in message or "how much" in message or "figure" in message

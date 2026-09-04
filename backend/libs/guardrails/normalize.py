@@ -130,6 +130,65 @@ def _canonicalize(text: str, prefix: str, cues: tuple[str, ...]) -> str | None:
     return None
 
 
+# Multipliers, which is what separates an amount from an identifier: "ten
+# ninety two" is a policy number read digit-group by digit-group, while
+# "twelve hundred" is a quantity.
+_SCALES = {"hundred": 100, "thousand": 1_000, "million": 1_000_000}
+
+# An amount below this is a section number, an item count or a stray digit.
+# Matches the floor the graph uses when reading figures out of an answer.
+_AMOUNT_FLOOR = 100
+
+
+def spoken_amounts(text: str) -> set[int]:
+    """Every money-sized quantity in a piece of text, spoken or written.
+
+    A caller says "twelve hundred dollars", never "1200.00". The confirmation
+    gate refuses an amount the policyholder never gave, so without this every
+    voice claim would be turned away for a figure the caller had just said out
+    loud.
+
+    Deliberately returns whole dollars and a set, not a single parsed value:
+    the question being asked is "did they say this number", not "what did they
+    mean", and a sentence can carry several.
+    """
+    found: set[int] = set()
+
+    for match in re.finditer(r"\d[\d,]*", text):
+        digits = match.group().replace(",", "")
+        if digits.isdigit() and int(digits) >= _AMOUNT_FLOOR:
+            found.add(int(digits))
+
+    total = current = 0
+    seen = False
+    for raw in re.split(r"[^a-z]+", text.lower()):
+        if raw in _UNITS:
+            current += _UNITS[raw]
+            seen = True
+        elif raw in _TENS:
+            current += _TENS[raw]
+            seen = True
+        elif raw in _SCALES:
+            scale = _SCALES[raw]
+            if scale == 100:
+                current = (current or 1) * 100
+            else:
+                total += (current or 1) * scale
+                current = 0
+            seen = True
+        elif raw == "and" and seen:
+            continue
+        else:
+            if seen and total + current >= _AMOUNT_FLOOR:
+                found.add(total + current)
+            total = current = 0
+            seen = False
+    if seen and total + current >= _AMOUNT_FLOOR:
+        found.add(total + current)
+
+    return found
+
+
 def normalize_policy_number(text: str) -> str | None:
     """Extract a canonical ``POL-####`` from spoken or typed text, or None."""
     return _canonicalize(text, "pol", _POLICY_CUES)

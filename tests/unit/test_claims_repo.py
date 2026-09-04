@@ -96,3 +96,41 @@ async def test_no_temp_file_left_behind(repo: JsonFileClaimsRepo) -> None:
     await repo.append(_args())
     leftovers = list(repo.path.parent.glob("*.tmp"))
     assert leftovers == []
+
+
+# ------------------------------------------------- examples are prompt text
+
+def test_no_tool_example_is_a_real_record() -> None:
+    """A tool's JSON schema is prompt text, and a model copies what it is shown.
+
+    Observed live: asked to file a theft claim, qwen2.5 announced "Policy
+    Number: POL-1092" without the policyholder ever saying it. POL-1092 does
+    not appear in the system prompt at all - it was the `examples` value on
+    submit_claim's own schema. The same schema offered CLM-8821 and 1200.00,
+    and all three are live rows in mock_claims.json, so a copied example does
+    not merely fabricate a value: it files against a real policyholder's
+    policy.
+
+    Format belongs in the pattern and the description, which cannot be pasted
+    into a tool call as a value.
+    """
+    import json
+    from pathlib import Path
+
+    from libs.contracts.claims import GetClaimStatusArgs, SubmitClaimArgs
+
+    seeded = json.loads(
+        (Path(__file__).resolve().parents[2] / "data" / "mock_claims.json")
+        .read_text(encoding="utf-8")
+    )
+    live = {str(v) for row in seeded for v in row.values()}
+    live |= {f"{float(row['amount']):.2f}" for row in seeded}
+
+    offenders = []
+    for model in (SubmitClaimArgs, GetClaimStatusArgs):
+        for field, spec in model.model_json_schema()["properties"].items():
+            for example in spec.get("examples", []):
+                if str(example) in live:
+                    offenders.append(f"{model.__name__}.{field} = {example!r}")
+
+    assert not offenders, f"tool examples are real records: {offenders}"
