@@ -224,6 +224,11 @@ def _grounded_answer(case: EvalCase, searcher: BM25Searcher) -> str:
         return f"A $4,000 ring exceeds $2,500, so it needs an individual appraisal receipt ({c2})."
     if "laptop" in message:
         return f"A $1,800 laptop is under $2,500, so no appraisal is required ({c2})."
+    if "appraisal" in message or "receipt" in message:
+        # Both amounts side by side, which is what the prompt asks for and what
+        # makes the claim checkable - see `_contradicts_itself` in the graph.
+        return (f"$1,500 is under the $2,500 appraisal threshold, so no "
+                f"individual receipt is required ({c2}).")
     if "electronics" in message or "jewelry" in message or "jewellery" in message:
         return f"Electronics, furniture and jewelry are covered up to $10,000 in total ({c2})."
     if bucket == "safety_indirect":

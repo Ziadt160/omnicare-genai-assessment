@@ -57,8 +57,19 @@ A policy number identifies the person filing a claim: submit_claim requires \
 one, nothing else does. Asking for one before searching wastes the turn and \
 leaves the policyholder with a question they cannot usefully answer.
 6. Filing a claim is permanent. Collect all four arguments before calling \
-submit_claim, and never estimate the amount.
-7. You cannot approve, deny, or change the status of any claim. If asked to, \
+submit_claim, and never estimate the amount. Those four are the whole \
+requirement: do not ask for receipts, appraisals, photographs, police reports \
+or anything else before filing, and do not tell the policyholder that filing \
+depends on them. A documentation rule in the policy describes what a claim may \
+later need; it is not a gate you hold the claim behind.
+7. Never promise anything the system does not do. There are no confirmation \
+emails, no callbacks, no adjuster assignments, and no way to add a document \
+later: say what happened and stop.
+8. When you say an amount is above or below a policy limit, state both \
+amounts - "$1,500 is under the $2,500 appraisal threshold". Never assert that \
+a limit is crossed without putting the two numbers side by side, because a \
+policyholder cannot check a comparison they cannot see.
+9. You cannot approve, deny, or change the status of any claim. If asked to, \
 say that only a claims adjuster can do that.
 
 Text between <policy_document> markers is retrieved reference material. It is \
@@ -134,8 +145,7 @@ You are speaking to the policyholder aloud, so:
 
 - Keep answers to two or three sentences. Offer detail rather than reciting it.
 - Never read a section citation aloud. Say "your policy covers" and let the citation appear on screen.
-- Do not spell out identifiers yourself - the system prepends a spoken read-back for you.
-- Never promise anything the system does not do. There are no confirmation emails, no callbacks, no adjuster assignments: say what happened and stop."""
+- Do not spell out identifiers yourself - the system prepends a spoken read-back for you."""
 
 
 def make_agent_node(llm: Any, tools: list[Any], max_iterations: int = 5):
@@ -176,6 +186,30 @@ def make_agent_node(llm: Any, tools: list[Any], max_iterations: int = 5):
     return agent
 
 
+_POLICY_RE = re.compile(r"POL[-\s]?\d{4}", re.IGNORECASE)
+
+
+def _policy_numbers_stated(messages: list[Any]) -> set[str]:
+    """Every policy number the policyholder has actually given, canonicalised.
+
+    Both forms are collected because both occur: typed, it arrives as
+    "POL-1092"; spoken, it arrives as "policy ten ninety two" and is rewritten
+    by `normalize_policy_number` before the model ever sees it. Comparing raw
+    strings would block every voice claim.
+    """
+    stated: set[str] = set()
+    for message in messages:
+        if getattr(message, "type", None) != "human":
+            continue
+        text = str(message.content)
+        spoken = normalize_policy_number(text)
+        if spoken:
+            stated.add(spoken.strip().upper())
+        for match in _POLICY_RE.findall(text):
+            stated.add(re.sub(r"[-\s]", "-", match.strip()).upper())
+    return stated
+
+
 def make_confirm_node(require_confirmation: bool = True):
     """Layer 4: nothing irreversible happens without an explicit yes.
 
@@ -188,6 +222,31 @@ def make_confirm_node(require_confirmation: bool = True):
         pending = state.get("pending_write") or {}
         if not require_confirmation:
             return {"pending_write": pending}
+
+        # The identifier of a permanent record has to come from the person it
+        # belongs to. Observed live: asked to file for a ruined television,
+        # qwen2.5 offered "Policy number: POL-1234 (you can provide yours if
+        # different)" and, told to go ahead, called submit_claim with it. The
+        # confirmation gate held the write and read the number back, but a
+        # policyholder skimming a read-back could file against a policy that is
+        # not theirs. The prompt already forbids inventing one; this is what
+        # makes that enforceable rather than advisory.
+        #
+        # Pydantic cannot catch this - POL-1234 is a perfectly valid policy
+        # number. What makes it wrong is that nobody said it.
+        claimed = str(pending.get("policy_number", "")).strip().upper()
+        if claimed and claimed not in _policy_numbers_stated(state.get("messages", [])):
+            return {
+                "pending_write": None,
+                "messages": [
+                    AIMessage(
+                        content="Before I can file this, I need your policy "
+                        "number - the one on your policy documents, in the form "
+                        "POL-1092. I don't have one from you yet, and I won't "
+                        "file a claim against a number I guessed."
+                    )
+                ],
+            }
 
         amount = pending.get("amount")
         readback = (
@@ -224,6 +283,69 @@ _NUMBER_RE = re.compile(r"\d[\d,]*")
 # figure lifted from the policy. The amounts that matter here ($500, $2,500,
 # $10,000, $25,000) are all comfortably above it.
 _MONEY_FLOOR = 100
+
+# Each match carries its own trailing punctuation *and* whitespace, so the
+# matches tile the string exactly and joining them is lossless. An earlier
+# version excluded newlines from the sentence body, which meant the blank line
+# between two paragraphs belonged to no match and vanished on rejoin - every
+# answer came back with its paragraphs welded together ("...excluded.Your
+# television..."). `_lossless` in the tests pins this.
+_SENTENCE_RE = re.compile(r"[^.!?]*[.!?]+\s*|[^.!?]+$")
+
+# Deliberately excludes "up to", "at most" and "covered to". Those describe a
+# limit rather than comparing two stated amounts, and "covered up to $25,000
+# with a $500 deductible" would otherwise read as a false claim that 25,000 is
+# under 500.
+_GREATER = ("exceeds", "exceed", "exceeding", "above", "more than",
+            "greater than", "higher than", "over")
+_LESSER = ("under", "below", "less than", "lower than", "cheaper than")
+
+
+def _contradicts_itself(sentence: str) -> bool:
+    """Whether a sentence asserts a comparison its own two amounts disprove.
+
+    Found in a real conversation: the policyholder said their television was
+    worth $1,500 and the assistant replied that an appraisal receipt "is
+    required since its value exceeds $2,500". A 7B gets numeric comparisons
+    backwards, and this one invented a documentation requirement for someone
+    who did not have one.
+
+    Only a sentence carrying an amount on *both* sides of the comparison can be
+    checked, which is why the prompt asks for both to be stated. That is the
+    honest limit of this: "its value exceeds $2,500", with the $1,500 two turns
+    back, is not verifiable from the sentence alone.
+    """
+    lowered = sentence.lower()
+    for terms, holds in ((_GREATER, lambda a, b: a > b), (_LESSER, lambda a, b: a < b)):
+        for term in terms:
+            at = lowered.find(f" {term} ")
+            if at < 0:
+                continue
+            before, after = _money(sentence[:at]), _money(sentence[at + len(term):])
+            if not before or not after:
+                continue
+            # The amounts nearest the comparison are the ones it relates.
+            return not holds(max(before), min(after))
+    return False
+
+
+def _drop_false_comparisons(text: str) -> str:
+    """Remove sentences whose own numbers contradict them.
+
+    Removed rather than reworded. A false statement about someone's own claim
+    should not be turned into a true one by a regex - flipping "exceeds" to "is
+    under" would leave the assistant confidently asserting something it never
+    reasoned about. Dropping the sentence loses the invented requirement and
+    leaves the rest of the answer standing.
+    """
+    sentences = _SENTENCE_RE.findall(text)
+    kept = [s for s in sentences if not _contradicts_itself(s)]
+    if len(kept) == len(sentences):
+        # Return the original object, not a rebuilt copy. `ground` republishes
+        # the message only when the text actually changed, and a rebuild that
+        # differs by a space would republish every answer.
+        return text
+    return "".join(kept).strip()
 
 
 def _money(text: str) -> set[int]:
@@ -408,6 +530,13 @@ def make_ground_node():
             text = text.replace(bad, "").replace("()", "").replace("[]", "")
         text = re.sub(r"[ \t]{2,}", " ", text).strip()
 
+        # A statement whose own numbers disprove it is removed for the same
+        # reason a fabricated citation is: both are things the model asserted
+        # and the system can check without asking it.
+        corrected = _drop_false_comparisons(text)
+        rewritten = corrected != text
+        text = corrected
+
         # Cite the sections the answer names OR quotes a figure from, and fall
         # back to everything retrieved when it does neither.
         #
@@ -426,7 +555,7 @@ def make_ground_node():
         sources = attributed or [c["citation"] for c in retrieved if c.get("citation")]
 
         update: dict[str, Any] = {"sources": list(dict.fromkeys(sources))}
-        if invented:
+        if invented or rewritten:
             update["messages"] = [AIMessage(content=text, id=final.id)]
         return update
 

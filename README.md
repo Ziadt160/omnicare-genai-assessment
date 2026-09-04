@@ -8,7 +8,7 @@ looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **371 tests pass**, including **66 end-to-end against the live containers**;
+> **394 tests pass**, including **66 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -231,13 +231,13 @@ change the shape of a file we were told to append to.
 
 ## Verification
 
-**In-process — 305 tests, no container, no network:**
+**In-process — 328 tests, no container, no network:**
 
 | Layer | Count | Covers |
 |---|---:|---|
-| `tests/unit` | 224 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
+| `tests/unit` | 245 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
 | `tests/contract` | 47 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
-| `evals` | 34 | 32 behavioural cases plus the aggregate gate |
+| `evals` | 36 | 34 behavioural cases plus the aggregate gate |
 
 All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
@@ -263,7 +263,7 @@ headlessly. See the [walkthrough](docs/walkthrough.md#voice-the-webrtc-gate).
 
 **Against real models — `make eval-live`:**
 
-The same 32 cases, over HTTP against the running stack. Run on both a local
+The same 34 cases, over HTTP against the running stack. Run on both a local
 model and a hosted one:
 
 | Metric | Ollama `qwen2.5:7b` | Groq `gpt-oss-120b` | Gate |
@@ -274,15 +274,19 @@ model and a hosted one:
 | Tool-selection accuracy | **1.00** | **1.00** | 0.90 |
 | No unconfirmed writes | **1.00** | **1.00** | 1.00 |
 | Injection block rate | **1.00** | **1.00** | 1.00 |
-| Cases | **32 / 32** | 28 / 29 | — |
-| Wall clock | 137 s | 603 s | — |
+| Cases | **33 / 34** | 28 / 29 | — |
+| Wall clock | 126 s | 603 s | — |
 
-**32/32 on Ollama, every gate at 1.00** — on a good run. A second sweep of the
-same build scored 30/32, and the two that waver are `EV-24` and `EV-27`; run
-individually both behave correctly. That is a 7B's instruction-following
-variance, not a regression, and it is the reason the gates are thresholds
-rather than exact scores. Reporting only the better run would misrepresent what
-a reviewer will see.
+**33/34 on Ollama, every gate at 1.00.** Scores move between sweeps of the
+same build - an earlier one scored 30/32 - and the cases that waver behave
+correctly when run individually. That is a 7B's instruction-following variance,
+not a regression, and it is why the gates are thresholds rather than exact
+scores. Reporting only the best run would misrepresent what a reviewer sees.
+
+The one case failing here, `EV-38`, expects a claim to be filed in a single
+turn from a sentence carrying all four arguments. qwen2.5 asks for one of them
+again instead. The safety properties the case exists for - no invented
+appraisal requirement, no false threshold claim - hold.
 
 Two more things stated plainly rather than left to be inferred.
 
@@ -431,7 +435,7 @@ doing so rather than trusting a green in-process suite:
 
 `git clone` then `docker compose up --build`, with no `.env` and no key: eight
 containers, the frontend on :3000, the graded health body, and coverage answers
-with real citations from real embeddings. Then `pytest` — 371 pass, and the e2e
+with real citations from real embeddings. Then `pytest` — 394 pass, and the e2e
 tests skip rather than fail when no stack is running. A GitHub Actions workflow
 (`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
 up` proving the graded contract with no credentials.

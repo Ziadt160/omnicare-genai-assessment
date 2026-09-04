@@ -270,7 +270,7 @@ async def test_declining_the_confirmation_writes_nothing(repo, searcher) -> None
     config = cfg()
 
     await graph.ainvoke(
-        {"messages": [HumanMessage(content="file a claim")], "user_id": "usr_123",
+        {"messages": [HumanMessage(content="file a water damage claim on POL-1092 for $1,200")], "user_id": "usr_123",
          "channel": "text"},
         config,
     )
@@ -291,7 +291,7 @@ async def test_approving_the_confirmation_writes_the_claim(repo, searcher) -> No
     config = cfg()
 
     await graph.ainvoke(
-        {"messages": [HumanMessage(content="file a claim")], "user_id": "usr_123",
+        {"messages": [HumanMessage(content="file a water damage claim on POL-1092 for $1,200")], "user_id": "usr_123",
          "channel": "text"},
         config,
     )
@@ -721,3 +721,200 @@ async def test_a_small_number_is_not_treated_as_a_figure(repo, both_sections) ->
     out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
 
     assert out["sources"] == [CITATION_1]
+
+
+# ------------------------------------------------- arithmetic about the policy
+
+async def test_a_comparison_its_own_numbers_contradict_is_removed(
+    repo, both_sections
+) -> None:
+    """Found in a real conversation: the policyholder said their TV was worth
+    $1,500 and the assistant replied that an appraisal receipt "is required
+    since its value exceeds $2,500".
+
+    $1,500 does not exceed $2,500. A small model gets numeric comparisons
+    backwards, and this one invented a documentation requirement for a
+    policyholder who does not have one. The sentence is removed rather than
+    reworded: a false statement about someone's own claim should not be
+    reworded into a true one by a regex, and the rest of the answer stands.
+    """
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "appraisal"}),
+        TextTurn(
+            "Your television is covered. An appraisal receipt is required "
+            "because $1,500 exceeds $2,500. Shall I file the claim?"
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "My $1,500 TV was ruined.")
+
+    answer = out["messages"][-1].content
+    assert "exceeds" not in answer, "the false comparison survived"
+    assert "Shall I file the claim?" in answer, "the rest of the answer was lost"
+
+
+async def test_a_true_comparison_is_left_alone(repo, both_sections) -> None:
+    """The check must not touch correct arithmetic - that is the normal case."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "appraisal"}),
+        TextTurn("An appraisal receipt is needed because $4,000 exceeds $2,500."),
+    ])
+    out = await run(make(llm, repo, both_sections), "My $4,000 ring was stolen.")
+
+    assert "$4,000 exceeds $2,500" in out["messages"][-1].content
+
+
+async def test_a_true_under_comparison_is_left_alone(repo, both_sections) -> None:
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "appraisal"}),
+        TextTurn("No appraisal is needed: $1,800 is under $2,500."),
+    ])
+    out = await run(make(llm, repo, both_sections), "My $1,800 laptop was ruined.")
+
+    assert "$1,800 is under $2,500" in out["messages"][-1].content
+
+
+async def test_policy_wording_is_not_mistaken_for_a_comparison(
+    repo, both_sections
+) -> None:
+    """"covered up to $25,000 with a $500 deductible" contains two amounts and
+    the words "up to", and asserts no comparison between them. Reading it as
+    one and deleting the sentence would remove the answer."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn(
+            "Sudden pipe bursts are covered up to $25,000 with a $500 "
+            "deductible. Single items exceeding $2,500 need a receipt."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    answer = out["messages"][-1].content
+    assert "$25,000" in answer and "$500" in answer
+    assert "$2,500" in answer
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "One sentence.",
+        "First. Second! Third?",
+        "A paragraph ends here.\n\nAnd another begins.",
+        "No trailing punctuation",
+        "Covered up to $25,000.\n- bullet one\n- bullet two\n\nThen prose.",
+        "",
+    ],
+)
+def test_sentence_splitting_is_lossless(text: str) -> None:
+    """The check rebuilds the answer from its sentences, so the split has to
+    tile the string exactly.
+
+    The first version excluded newlines from a sentence body, so the blank line
+    between two paragraphs belonged to no match and disappeared on rejoin -
+    every answer came back with its paragraphs welded together
+    ("...strictly excluded.Your television falls under..."). Seen only by
+    reading the output of a real turn; no assertion in the suite was looking at
+    whitespace.
+    """
+    from agent.app.graph.nodes import _SENTENCE_RE
+
+    assert "".join(_SENTENCE_RE.findall(text)) == text
+
+
+async def test_a_clean_answer_is_passed_through_untouched(repo, both_sections) -> None:
+    """Nothing to remove means nothing is rebuilt - paragraphs, bullets and
+    spacing all survive exactly as the model wrote them."""
+    original = (
+        "Sudden pipe bursts are covered up to $25,000.\n\n"
+        "Gradual leaks are excluded, under Section 1: Home Water Damage Coverage."
+    )
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn(original),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert out["messages"][-1].content == original
+
+
+# ------------------------------------------- a policy number must come from you
+
+async def test_a_policy_number_the_policyholder_never_gave_is_refused(
+    repo, searcher
+) -> None:
+    """Observed live. Asked to file for a ruined television, qwen2.5 offered
+    "Policy number: POL-1234 (you can provide yours if different)" and, told to
+    go ahead, called submit_claim with it. The confirmation gate held the write
+    and read it back - "P-O-L, one two three four" - but a policyholder
+    skimming a read-back could file against a policy that is not theirs.
+
+    Rule 4 of the prompt already forbids inventing one. This makes it
+    enforceable rather than advisory: the identifier of the record being
+    written must have come from the person it belongs to.
+    """
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1234",
+            "claim_type": "Water Damage",
+            "amount": "1500.00",
+            "description": "A burst pipe ruined the television.",
+        }),
+        TextTurn("Filed."),
+    ])
+    out = await run(
+        make(llm, repo, searcher),
+        "a pipe burst and ruined my television, file a claim for $1,500",
+    )
+
+    assert out.get("pending_write") is None, "a fabricated policy number reached the write"
+    assert "policy number" in out["messages"][-1].content.lower()
+    assert await repo.list_ids() == ["CLM-8821", "CLM-9014"], "nothing may be written"
+
+
+async def test_a_policy_number_the_policyholder_gave_is_accepted(
+    repo, searcher
+) -> None:
+    """The gate must not obstruct the normal case."""
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092",
+            "claim_type": "Water Damage",
+            "amount": "1500.00",
+            "description": "A burst pipe ruined the television.",
+        }),
+        TextTurn("Filed."),
+    ])
+    graph = make(llm, repo, searcher)
+    config = cfg()
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="File a claim on POL-1092 for $1,500 - burst pipe")],
+         "user_id": "usr_123", "channel": "text"},
+        config,
+    )
+    await graph.ainvoke(Command(resume="yes"), config)
+
+    assert await repo.list_ids() == ["CLM-8821", "CLM-9014", "CLM-9015"], (
+        "a policy number the policyholder gave must file normally"
+    )
+    assert (await repo.get("CLM-9015")).policy_number == "POL-1092"
+
+
+async def test_a_spoken_policy_number_is_recognised(repo, searcher) -> None:
+    """Over voice it arrives as "policy ten ninety two" and is normalised
+    before the model sees it, so the check has to compare normalised forms or
+    it would block every voice claim."""
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092",
+            "claim_type": "Water Damage",
+            "amount": "1500.00",
+            "description": "A burst pipe ruined the television.",
+        }),
+        TextTurn("Filed."),
+    ])
+    out = await run(
+        make(llm, repo, searcher),
+        "file a claim on policy POL 1092 for fifteen hundred dollars, burst pipe",
+        channel="voice",
+    )
+
+    assert out.get("pending_write") is not None or "confirm" in str(out).lower()

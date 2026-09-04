@@ -130,6 +130,45 @@ transcribed `POL-1092` extracted as `POL-1029`.
 
 ---
 
+### What a real filing conversation found
+
+Five faults in one exchange, none of which the scripted suite could reach.
+
+Asked to file for a ruined television, the assistant demanded "the exact value"
+and "whether you have individual appraisal receipts for items exceeding
+$2,500" - then, told the television was worth $1,500, replied that a receipt
+"is required since its value exceeds $2,500". **$1,500 is less than $2,500.** A
+documentation rule in the policy had been turned into a gate in front of the
+claim, on arithmetic that was backwards. It also offered to take the receipt
+"later", which the system has no way to do.
+
+Three of those are prompt faults, and one was a rule that already existed in
+the wrong place: "never promise anything the system does not do" was in the
+**voice** addendum only, and this was a text conversation.
+
+The fourth is enforced rather than asked for. `ground` removes a sentence whose
+own two numbers contradict it - the same treatment a fabricated citation gets,
+for the same reason: both are claims the model made that the system can check
+without asking it. Removed rather than reworded, because a false statement
+about someone's own claim should not be turned into a true one by a regex.
+
+The fifth appeared only by carrying the conversation to the end. Offered no
+policy number, the model supplied `POL-1234` and filed against it. The
+confirmation gate held the write and read it back - "P-O-L, one two three
+four" - but a policyholder skimming could confirm a claim on a policy that is
+not theirs. The identifier of a permanent record now has to have come from the
+person it belongs to. Pydantic cannot catch this: `POL-1234` is a perfectly
+valid policy number, and the only thing wrong with it is that nobody said it.
+
+Chasing that turned up a bug in the voice path underneath. "policy ten ninety
+two for twelve hundred dollars" converted *every* number word after the cue, so
+the amount ran into the identifier - 109212, six digits, rejected. Spoken policy
+numbers were therefore never normalised, in the most ordinary sentence a caller
+says when filing a claim. The eval covering it passed only because the scripted
+model was handed the right answer.
+
+---
+
 ## 8. Confirmed, and filed
 
 ![Claim filed after confirmation](images/08-claim-filed.png)
@@ -397,17 +436,17 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 305 in-process, no container, no network
+make test        # 328 in-process, no container, no network
 pytest tests/e2e -m e2e   # 66 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 224 |
+| `tests/unit` | 245 |
 | `tests/contract` | 47 |
 | `tests/e2e` | 66 |
-| `evals` | 34 |
+| `evals` | 36 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
