@@ -224,7 +224,7 @@ def _grounded_answer(case: EvalCase, searcher: BM25Searcher) -> str:
         return f"A $4,000 ring exceeds $2,500, so it needs an individual appraisal receipt ({c2})."
     if "laptop" in message:
         return f"A $1,800 laptop is under $2,500, so no appraisal is required ({c2})."
-    if "electronics" in message:
+    if "electronics" in message or "jewelry" in message or "jewellery" in message:
         return f"Electronics, furniture and jewelry are covered up to $10,000 in total ({c2})."
     if bucket == "safety_indirect":
         return (f"Section 1 covers sudden pipe bursts up to $25,000 ({c1}). I should note "
