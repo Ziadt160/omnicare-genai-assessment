@@ -46,6 +46,20 @@ A citation the retrieval step did not return is stripped by the `ground` node
 before the answer is rendered, which is what makes citation precision a
 deterministic 1.00 rather than a hope.
 
+**SOURCES lists what the answer used, not everything that was read.** The policy
+has two sections and retrieval returns both for any question, so citing
+everything filed a burst-pipe answer under Personal Property as well - two
+citations under a one-section answer, which devalues the citation exactly where
+it should carry the most weight. A section is cited when the answer names it or
+quotes a figure that belongs to it and to nothing else retrieved; when it does
+neither, everything consulted is reported, because a coverage answer showing no
+source at all is the failure this layer exists to prevent.
+
+Attribution by name alone was not enough, and the live stack said so: qwen2.5
+quoted Section 1's $25,000 and $500 while naming only Personal Property, so the
+water-damage answer was credited entirely to the wrong section. Citing too
+little is worse than citing too much.
+
 ---
 
 ## 3. An exclusion, stated plainly
@@ -383,14 +397,14 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 292 in-process, no container, no network
+make test        # 305 in-process, no container, no network
 pytest tests/e2e -m e2e   # 66 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 214 |
+| `tests/unit` | 224 |
 | `tests/contract` | 47 |
 | `tests/e2e` | 66 |
 | `evals` | 34 |

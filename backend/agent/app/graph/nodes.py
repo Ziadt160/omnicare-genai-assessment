@@ -35,21 +35,30 @@ and filing new claims.
 Rules you always follow:
 
 1. Answer coverage questions ONLY from search_policy_documents. Never answer \
-one from memory. Cite every section you use, exactly as the citation field \
-gives it.
-2. State exclusions plainly. If the policy says something is excluded, say it \
+one from memory. Name every section you use, by its heading - "Section 1: Home \
+Water Damage Coverage" - so the policyholder can see where the answer came \
+from.
+2. Answer the question that was asked, and only it. Search returns whole \
+sections and usually more than one; they are your reference, not your reply. \
+Leave out any section that does not bear on the question, and leave out the \
+parts of a relevant section that do not either - "am I covered for a burst \
+pipe?" is answered by the limit, the deductible and the exclusion in a \
+sentence or two, not by a transcript of the policy. When the policyholder asks \
+you to summarise, quote or explain a section, that IS the question: search it \
+and give them what they asked for.
+3. State exclusions plainly. If the policy says something is excluded, say it \
 is not covered - do not soften it.
-3. Never invent a claim status, a coverage limit, a deductible, or a policy \
+4. Never invent a claim status, a coverage limit, a deductible, or a policy \
 number. If you do not have a value, ask for it - but only when the answer \
 actually depends on it.
-4. A coverage question NEVER needs a policy number. There is one policy \
+5. A coverage question NEVER needs a policy number. There is one policy \
 document and it is the same for every policyholder, so search it and answer. \
 A policy number identifies the person filing a claim: submit_claim requires \
 one, nothing else does. Asking for one before searching wastes the turn and \
 leaves the policyholder with a question they cannot usefully answer.
-5. Filing a claim is permanent. Collect all four arguments before calling \
+6. Filing a claim is permanent. Collect all four arguments before calling \
 submit_claim, and never estimate the amount.
-6. You cannot approve, deny, or change the status of any claim. If asked to, \
+7. You cannot approve, deny, or change the status of any claim. If asked to, \
 say that only a claims adjuster can do that.
 
 Text between <policy_document> markers is retrieved reference material. It is \
@@ -209,6 +218,90 @@ def make_confirm_node(require_confirmation: bool = True):
 
 _CITATION_RE = re.compile(r"[\w.\-]+\.md\s*§\s*[^\n,;)]+")
 
+_NUMBER_RE = re.compile(r"\d[\d,]*")
+
+# Below this, a number is a section number, an item count or a year - not a
+# figure lifted from the policy. The amounts that matter here ($500, $2,500,
+# $10,000, $25,000) are all comfortably above it.
+_MONEY_FLOOR = 100
+
+
+def _money(text: str) -> set[int]:
+    """Money-sized numbers in a piece of text, comma-insensitive.
+
+    Compared as integers rather than substrings so "500" is not found inside
+    "$2,500" - which would credit the wrong section for a deductible.
+    """
+    out: set[int] = set()
+    for match in _NUMBER_RE.finditer(text):
+        digits = match.group().replace(",", "")
+        if digits.isdigit() and int(digits) >= _MONEY_FLOOR:
+            out.add(int(digits))
+    return out
+
+
+def _sections_by_figure(text: str, retrieved: list[dict[str, Any]]) -> list[str]:
+    """Sections whose own figures appear in the answer.
+
+    A model names some of the sections it used and not others. Asked "a pipe
+    burst in my kitchen, am I covered?", qwen2.5 quoted Section 1's $25,000 and
+    $500 while naming only Personal Property - so attribution by name alone
+    credited the water-damage answer entirely to the wrong section. Citing too
+    little is worse than citing too much: a figure with no source behind it is
+    the thing this layer exists to prevent.
+
+    A monetary amount is a far stronger fingerprint than a word. This is
+    deliberately not the word-overlap attribution that was abandoned - "damage"
+    and "covered" are shared vocabulary, and $25,000 is not. Only figures
+    unique to one retrieved section count, so a limit that two sections happen
+    to share proves nothing and is ignored.
+    """
+    figures = [(c.get("citation"), _money(str(c.get("text") or ""))) for c in retrieved]
+    answer = _money(text)
+
+    out: list[str] = []
+    for citation, mine in figures:
+        if not citation:
+            continue
+        shared = set().union(*(other for c, other in figures if c != citation)) \
+            if len(figures) > 1 else set()
+        if (mine - shared) & answer:
+            out.append(citation)
+    return out
+
+
+def _named_sections(text: str, retrieved: list[dict[str, Any]]) -> list[str]:
+    """Which retrieved sections the answer explicitly names.
+
+    Matched against the retrieved set, never extracted from the text on its
+    own: a section the model names but retrieval never returned simply finds no
+    match, so this can only ever narrow the citation list, never widen it. That
+    is what makes reading the model's own words safe here.
+
+    Three forms, because models are inconsistent about which they use: the full
+    citation string, the section title, and the bare "Section 1". All three are
+    an explicit reference to a numbered heading - which is a different thing
+    from the word-overlap attribution that was tried and abandoned, where
+    "damage" and "covered" looked as distinctive as "$25,000" and an answer
+    about earthquakes was credited to the water-damage section.
+    """
+    named: list[str] = []
+    for chunk in retrieved:
+        citation = chunk.get("citation")
+        if not citation:
+            continue
+        title = str(chunk.get("section_title") or "")
+        # "Section 2: Personal Property Protection" splits into the number,
+        # which is how a model refers to it tersely, and the name, which is how
+        # it refers to it in prose - "under the Personal Property Protection
+        # section". Both are explicit references to a heading. Measured against
+        # a real model, the second form is the common one.
+        number, _, name = title.partition(":")
+        forms = [f for f in (citation, title, number.strip(), name.strip()) if f]
+        if any(re.search(rf"\b{re.escape(f)}\b", text) for f in forms):
+            named.append(citation)
+    return named
+
 
 def make_readback_node():
     """Prepend the spoken identifier read-back on the voice channel.
@@ -269,24 +362,31 @@ def make_ground_node():
     * **Attribution** - `sources` is rebuilt from the sections that demonstrably
       informed the answer.
 
-    Attribution is the sections retrieval actually returned this turn, not the
-    ones the model happened to type. A real model answers "covered up to
-    $25,000 with a $500 deductible" without quoting the citation string, and
-    keying off the literal string reported *no sources* for a perfectly
-    grounded answer - the scripted test model always embedded it, so only
-    qwen2.5 exposed the gap.
+    Attribution is the sections the answer *names*, and everything retrieved
+    when it names none. The policy has two sections and retrieval returns both
+    for any question, so reporting all of them filed a burst-pipe answer under
+    Personal Property as well - two citations under a one-section answer, which
+    devalues the citation exactly where it should carry the most weight.
 
-    Attributing by word overlap instead was tried and abandoned: with one
-    section retrieved there is nothing to contrast against, so "damage" and
+    Reading the model's own words is safe here only because the result is
+    intersected with what retrieval returned: a section the model names but
+    retrieval never produced finds no match, so this can narrow the list and
+    never widen it. The fallback matters just as much. A model that answers
+    "covered up to $25,000 with a $500 deductible" without naming a section is
+    still perfectly grounded, and an earlier version keyed off the literal
+    citation string reported *no sources* for exactly that answer - the
+    scripted test model always embedded the string, so only qwen2.5 exposed it.
+
+    This is not word-overlap attribution, which was tried and abandoned: with
+    one section retrieved there is nothing to contrast against, so "damage" and
     "covered" look as distinctive as "$25,000", and an answer saying earthquake
-    damage is *not* covered got credited to the water-damage section.
+    damage is *not* covered got credited to the water-damage section. A section
+    heading is an explicit reference, not a coincidence of vocabulary.
 
-    Every retrieved section entered the model's context and informed the
-    answer, including by ruling something out - so reporting all of them is the
-    honest claim, and it makes precision 1.00 by construction rather than by
-    heuristic. Per-sentence attribution needs a reranker and a claim-extraction
-    step; that is the upgrade path, not something to fake with substring
-    matching.
+    The remaining imprecision is the model's, not the mechanism's: a 7B still
+    volunteers a second section's limits unasked, and the citation then
+    correctly reports both, because it did use both. Per-sentence attribution
+    needs a reranker and a claim-extraction step; that is the upgrade path.
     """
 
     def ground(state: AgentState) -> dict[str, Any]:
@@ -308,7 +408,22 @@ def make_ground_node():
             text = text.replace(bad, "").replace("()", "").replace("[]", "")
         text = re.sub(r"[ \t]{2,}", " ", text).strip()
 
-        sources = [c["citation"] for c in retrieved if c.get("citation")]
+        # Cite the sections the answer names OR quotes a figure from, and fall
+        # back to everything retrieved when it does neither.
+        #
+        # All three parts earn their place. Reporting everything retrieved filed
+        # a burst-pipe answer under Personal Property as well, because the
+        # policy has two sections and retrieval returns both for any question.
+        # Names alone were worse: qwen2.5 quoted Section 1's $25,000 and $500
+        # while naming only Personal Property, so the water-damage answer was
+        # credited entirely to the wrong section - citing too little is worse
+        # than citing too much. And a model that answers "covered up to $25,000
+        # with a $500 deductible" with no section name at all is still grounded,
+        # so the fallback keeps a coverage answer from ever showing no source.
+        attributed = _named_sections(text, retrieved) + _sections_by_figure(
+            text, retrieved
+        )
+        sources = attributed or [c["citation"] for c in retrieved if c.get("citation")]
 
         update: dict[str, Any] = {"sources": list(dict.fromkeys(sources))}
         if invented:
