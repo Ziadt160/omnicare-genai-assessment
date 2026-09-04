@@ -38,7 +38,44 @@ let streamingBubble = null;
 
 /* ------------------------------------------------------------- rendering */
 
+/* Following the conversation down.
+ *
+ * Two failures to avoid, and they pull in opposite directions. `scrollTop` was
+ * set when a message was added and on every token, but citations arrive *after*
+ * the last token and `sources` appended them without scrolling - so the block
+ * was in the DOM, `display: flex`, fully opaque, and below the fold. Present
+ * and invisible is the worst way for a citation to fail, because nothing looks
+ * broken. Meanwhile scrolling on every token dragged a reader who had scrolled
+ * up to re-read an earlier answer back to the bottom, several times a second.
+ *
+ * So: follow only a reader who is already at the bottom, and measure that
+ * *before* inserting, since the new content is exactly what would otherwise
+ * make them look far from it. */
+const FOLLOW_SLACK_PX = 140;
+
+function isFollowing() {
+  const t = el.thread;
+  return t.scrollHeight - t.scrollTop - t.clientHeight <= FOLLOW_SLACK_PX;
+}
+
+function scrollToLatest() {
+  el.thread.scrollTop = el.thread.scrollHeight;
+}
+
+/** Append something to the current reply, keeping it in view if the reader is
+ *  following along. */
+function appendToBubble(node) {
+  if (!streamingBubble) return;
+  const following = isFollowing();
+  streamingBubble.parentElement.appendChild(node);
+  if (following) scrollToLatest();
+}
+
 function addMessage(role, text, { sources = [], toolCalls = [], pending = false } = {}) {
+  // Your own message always pulls the view down - you just sent it. An
+  // assistant message does not, so an answer arriving while you are reading
+  // history stays out of the way until you scroll back.
+  const following = role === "user" || isFollowing();
   const li = document.createElement("li");
   li.className = `msg msg--${role}`;
 
@@ -54,7 +91,7 @@ function addMessage(role, text, { sources = [], toolCalls = [], pending = false 
 
   li.appendChild(bubble);
   el.thread.appendChild(li);
-  el.thread.scrollTop = el.thread.scrollHeight;
+  if (following) scrollToLatest();
   return body;
 }
 
@@ -168,23 +205,25 @@ function handleEvent(evt) {
       break;
 
     case "tool_end":
-      if (streamingBubble) {
-        streamingBubble.parentElement.appendChild(renderToolCalls([evt.payload]));
-      }
+      appendToBubble(renderToolCalls([evt.payload]));
       break;
 
     case "token":
       if (!streamingBubble) streamingBubble = addMessage("assistant", "");
       // Accumulate the raw text and re-render, rather than appending HTML:
       // a bold marker can straddle two chunks.
-      streamingBubble.dataset.raw = (streamingBubble.dataset.raw || "") + (evt.payload.text || "");
-      streamingBubble.innerHTML = renderText(streamingBubble.dataset.raw);
-      el.thread.scrollTop = el.thread.scrollHeight;
+      {
+        const following = isFollowing();
+        streamingBubble.dataset.raw =
+          (streamingBubble.dataset.raw || "") + (evt.payload.text || "");
+        streamingBubble.innerHTML = renderText(streamingBubble.dataset.raw);
+        if (following) scrollToLatest();
+      }
       break;
 
     case "sources":
-      if (streamingBubble && (evt.payload.sources || []).length) {
-        streamingBubble.parentElement.appendChild(renderSources(evt.payload.sources));
+      if ((evt.payload.sources || []).length) {
+        appendToBubble(renderSources(evt.payload.sources));
       }
       break;
 
@@ -359,6 +398,7 @@ async function probeHealth(attempts = 3) {
 window.OmniCare = {
   send,
   addMessage,
+  handleEvent,
   renderText,
   renderSources,
   renderToolCalls,

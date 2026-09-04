@@ -384,7 +384,7 @@ a dashboard.
 
 ```bash
 make test        # 292 in-process, no container, no network
-pytest tests/e2e -m e2e   # 63 against the running stack
+pytest tests/e2e -m e2e   # 66 against the running stack
 make eval        # the behavioural gate
 ```
 
@@ -392,7 +392,7 @@ make eval        # the behavioural gate
 |---|---:|
 | `tests/unit` | 214 |
 | `tests/contract` | 47 |
-| `tests/e2e` | 63 |
+| `tests/e2e` | 66 |
 | `evals` | 31 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·

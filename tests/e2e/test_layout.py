@@ -209,3 +209,84 @@ def test_text_is_readable_in_both_themes(browser, scheme: str) -> None:
         assert not poor, f"unreadable in {scheme} mode: {poor}"
     finally:
         page.close()
+
+
+# ------------------------------------------------- the citation stays in view
+
+def stream_answer(page, paragraphs: int = 4) -> None:
+    """Drive the real gateway event sequence for one streamed answer."""
+    page.evaluate(
+        """n => {
+            const H = window.OmniCare.handleEvent;
+            H({type: 'started', payload: {}});
+            H({type: 'tool_end', payload: {name: 'search_policy_documents', status: 'ok'}});
+            for (let i = 0; i < n; i++) {
+                H({type: 'token', payload: {text:
+                    'Sudden pipe bursts are covered up to $25,000 with a $500 ' +
+                    'deductible, while gradual leaks and flood damage are ' +
+                    'strictly excluded. Paragraph ' + i + '.' + String.fromCharCode(10, 10)}});
+            }
+            H({type: 'sources', payload: {sources: [
+                'sample_policy.md § Section 1: Home Water Damage Coverage',
+                'sample_policy.md § Section 2: Personal Property Protection']}});
+            H({type: 'done', payload: {}});
+        }""",
+        paragraphs,
+    )
+    page.wait_for_timeout(300)
+
+
+def test_the_citation_is_on_screen_after_a_streamed_answer(page) -> None:
+    """The bug behind "the citation source isn't showing".
+
+    `scrollTop` was set when a message was added and on every token, but the
+    citations arrive *after* the last token - and `sources` appended them
+    without scrolling. So the block existed, was `display: flex`, was fully
+    opaque, and sat below the fold: present in the DOM and invisible on screen,
+    which is the worst way for it to fail. The longer the answer, the further
+    down it went.
+    """
+    fill_thread(page, 6)
+    stream_answer(page)
+
+    visible = page.evaluate(
+        """() => {
+            const s = [...document.querySelectorAll('.msg--assistant .sources')].pop();
+            if (!s) return null;
+            const r = s.getBoundingClientRect();
+            const t = document.getElementById('thread').getBoundingClientRect();
+            return {below: Math.round(r.bottom - t.bottom), h: Math.round(r.height)};
+        }"""
+    )
+    assert visible is not None, "no citations were rendered at all"
+    assert visible["below"] <= 2, (
+        f"the citation block is {visible['below']}px below the visible area"
+    )
+
+
+def test_the_tool_chip_is_on_screen_too(page) -> None:
+    """Same mechanism: `tool_end` appended without scrolling."""
+    fill_thread(page, 6)
+    stream_answer(page)
+
+    below = page.evaluate(
+        """() => {
+            const c = [...document.querySelectorAll('.msg--assistant .tools')].pop();
+            const t = document.getElementById('thread').getBoundingClientRect();
+            return Math.round(c.getBoundingClientRect().bottom - t.bottom);
+        }"""
+    )
+    assert below <= 2, f"the tool chip is {below}px below the visible area"
+
+
+def test_reading_back_through_history_is_not_interrupted(page) -> None:
+    """The fix must not become a different annoyance: someone scrolled up to
+    re-read an earlier answer should not be yanked to the bottom when the next
+    citation arrives."""
+    fill_thread(page, 20)
+    page.evaluate("() => { document.getElementById('thread').scrollTop = 0; }")
+    page.wait_for_timeout(100)
+    stream_answer(page)
+
+    top = page.evaluate("() => document.getElementById('thread').scrollTop")
+    assert top < 200, f"the reader was dragged down to {top}px"
