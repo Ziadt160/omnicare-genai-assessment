@@ -65,6 +65,36 @@ def _words_to_digits(tokens: list[str]) -> str:
     return "".join(out)
 
 
+# Said between the cue and the digits, and carrying none of them.
+_FILLER = {"is", "number", "no", "the", "my", "it", "was", "of", "for", "hash"}
+
+
+def _identifier_run(tokens: list[str]) -> list[str]:
+    """The number words that form the identifier, and nothing after them.
+
+    Everything following the cue used to be converted, so the amount ran into
+    the identifier: "policy ten ninety two for twelve hundred dollars" became
+    109212, failed the four-digit check and yielded nothing. That is the most
+    ordinary sentence a caller says when filing a claim.
+
+    An identifier is a contiguous run of number words. A little filler is
+    allowed before it starts - "my policy is ten ninety two" - but once the
+    digits begin, the first word that is not one of them ends them.
+    """
+    run: list[str] = []
+    for token in tokens:
+        word = token.lower().strip(",.;:")
+        if word.isdigit() or word in _UNITS or word in _TENS:
+            run.append(word)
+        elif run:
+            break
+        elif word not in _FILLER:
+            # A non-filler word before any digit means the cue was not
+            # introducing an identifier at all.
+            break
+    return run
+
+
 def _canonicalize(text: str, prefix: str, cues: tuple[str, ...]) -> str | None:
     lowered = text.lower()
 
@@ -94,7 +124,7 @@ def _canonicalize(text: str, prefix: str, cues: tuple[str, ...]) -> str | None:
     if tail is None:
         return None
 
-    digits = _words_to_digits(tail.split())
+    digits = _words_to_digits(_identifier_run(tail.split()))
     if len(digits) == 4:
         return f"{prefix.upper()}-{digits}"
     return None

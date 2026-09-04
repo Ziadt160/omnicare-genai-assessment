@@ -68,3 +68,42 @@ def test_normalize_claim_id(spoken: str, expected: str | None) -> None:
 def test_phonetic_readback(identifier: str, expected: str) -> None:
     """A user can only verify by ear what is spoken verifiably."""
     assert phonetic_readback(identifier) == expected
+
+
+# ------------------------------------------ an identifier ends where it ends
+
+@pytest.mark.parametrize(
+    ("spoken", "expected"),
+    [
+        ("file a claim on policy ten ninety two for twelve hundred dollars",
+         "POL-1092"),
+        ("policy ten ninety two, the amount is fifteen hundred", "POL-1092"),
+        ("my policy is ten ninety two", "POL-1092"),
+        ("policy number ten ninety two please", "POL-1092"),
+        ("policy ten ninety two", "POL-1092"),
+    ],
+)
+def test_a_spoken_policy_number_survives_a_trailing_amount(spoken, expected) -> None:
+    """Everything after the cue was being converted, so the amount ran into the
+    identifier: "policy ten ninety two for twelve hundred dollars" produced
+    109212, failed the four-digit check and returned None.
+
+    That is the most ordinary sentence a caller says when filing a claim, so
+    spoken policy numbers were effectively never normalised - the model was
+    left to guess the digits, and the eval only passed because the scripted
+    model was handed the right answer.
+    """
+    assert normalize_policy_number(spoken) == expected
+
+
+def test_a_claim_id_survives_a_trailing_amount() -> None:
+    assert normalize_claim_id(
+        "check claim C L M eight eight two one for me"
+    ) == "CLM-8821"
+
+
+def test_a_policy_number_is_not_read_as_a_claim_id() -> None:
+    """"file a claim on policy POL 1092" was yielding CLM-1092: the word
+    "claim" is a cue, and the digits after it belong to the policy."""
+    assert normalize_policy_number("file a claim on policy POL 1092") == "POL-1092"
+    assert normalize_claim_id("file a claim on policy POL 1092") is None
