@@ -490,3 +490,16 @@ main {
   background: var(--surface);
   text-align: center;
 }
+
+/* Quiet by design. Starting over is occasionally useful and never urgent, so
+   it should not compete with Send for attention or sit close enough to it to
+   be hit by mistake. */
+.btn--quiet {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent;
+  border-color: var(--rule);
+  color: var(--ink-2);
+}
+.btn--quiet:hover { background: var(--surface-2); color: var(--ink); }

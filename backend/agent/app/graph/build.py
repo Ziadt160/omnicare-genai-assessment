@@ -80,7 +80,16 @@ def make_tools_node(tools: list[Any]):
 
             try:
                 result = await tool.ainvoke(args)
-                status = "ok"
+                # "ok" means the tool did what it was asked, not merely that it
+                # returned. A tool that declines - a claim above the policy's
+                # cap, a claim id that does not exist - reports an `error` key,
+                # and showing that as a green chip tells the policyholder their
+                # claim was filed when it was refused.
+                status = (
+                    "error"
+                    if isinstance(result, dict) and result.get("error")
+                    else "ok"
+                )
             except Exception as exc:  # surfaced to the model, not raised
                 result = {"error": type(exc).__name__, "detail": str(exc)}
                 status = "error"

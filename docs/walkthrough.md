@@ -130,6 +130,58 @@ transcribed `POL-1092` extracted as `POL-1029`.
 
 ---
 
+### The policy's own limits, read from the policy
+
+![A claim above the policy limit, refused with the wording quoted](images/13-over-limit.png)
+
+Section 1 covers water damage up to **$25,000**. A claim for **$250,000** - ten
+times the limit - was filed without comment, because the only thing checking the
+amount was a model doing arithmetic in its head. The same model had already told
+a policyholder that $1,500 "exceeds $2,500", so it was getting the comparison
+wrong in both directions.
+
+There is no built-in tool for this to reach for: `langgraph.prebuilt` offers
+`ToolNode`, `create_react_agent`, `ValidationNode` and `tools_condition`, and
+nothing arithmetic. A calculator tool would only move the judgement rather than
+remove it - the model would still decide when to call it and what to do with the
+answer. So the comparison is not asked of the model at all.
+
+The figures are **read out of the policy document** at ingest and compared in
+code. Editing `sample_policy.md` changes the rule; nothing in the code knows what
+the limits are. Three kinds of figure appear in the same sentence and mean
+entirely different things, which is the whole difficulty:
+
+```
+"covered up to $25,000 with a $500 deductible"
+ ^ the cap                    ^ not the cap
+
+"Single items exceeding $2,500 require individual appraisal receipts"
+                        ^ a documentation rule, not the cap
+```
+
+Reading the deductible as the cap refuses every claim over five hundred dollars;
+reading the per-item threshold as the cap refuses a $9,000 claim on a section
+covering $10,000. Each is matched by the wording that distinguishes it.
+
+Two deliberate choices. The section is found by the claim type **naming** it -
+"Water Damage" against "Section 1: Home Water Damage Coverage" - not by
+similarity, because the embedder ranks Personal Property above Home Water Damage
+for "what is my deductible?" and a cap applied from the wrong section would
+refuse a valid claim while quoting a figure that does not govern it. And it
+**fails open**: a claim type the policy does not cap, or a document that cannot
+be read, proceeds. Refusing on a limit that could not be verified is the worse
+error, and the confirmation gate still applies either way.
+
+The refusal quotes the wording, because "your policy covers this up to $25,000"
+is checkable by the policyholder and "the limit is $25,000" is one more
+assertion - which is what this whole layer exists to avoid.
+
+One thing the screenshot also shows: the `submit_claim` chip is red. "ok" used
+to mean "the tool returned", so a refused write showed a green chip that reads
+as *filed*.
+
+---
+
 ### Where a fabricated policy number came from
 
 A second reported conversation: asked to file a theft claim, the assistant
@@ -465,17 +517,17 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 344 in-process, no container, no network
-pytest tests/e2e -m e2e   # 66 against the running stack
+make test        # 362 in-process, no container, no network
+pytest tests/e2e -m e2e   # 68 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 261 |
+| `tests/unit` | 278 |
 | `tests/contract` | 47 |
-| `tests/e2e` | 66 |
-| `evals` | 36 |
+| `tests/e2e` | 68 |
+| `evals` | 37 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00

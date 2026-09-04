@@ -275,9 +275,12 @@ def build_worker(
     settings = settings or AgentSettings()
     repo = build_claims_repo(settings)
     idempotency = RedisIdempotencyStore(settings.redis_url) if settings.redis_url else None
+    # One client for both: the policy tool searches it, and the claims tools
+    # read the whole document from it to find the cap that governs a claim.
+    retrieval = RetrievalClient(settings.retrieval_url)
     tools = [
-        build_policy_tool(RetrievalClient(settings.retrieval_url)),
-        *build_claims_tools(repo, idempotency),
+        build_policy_tool(retrieval),
+        *build_claims_tools(repo, idempotency, sections=retrieval.sections),
     ]
 
     try:
