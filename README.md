@@ -8,7 +8,7 @@ looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **410 tests pass**, including **66 end-to-end against the live containers**;
+> **430 tests pass**, including **66 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -231,19 +231,19 @@ change the shape of a file we were told to append to.
 
 ## Verification
 
-**In-process — 344 tests, no container, no network:**
+**In-process — 362 tests, no container, no network:**
 
 | Layer | Count | Covers |
 |---|---:|---|
-| `tests/unit` | 261 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
+| `tests/unit` | 278 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
 | `tests/contract` | 47 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
-| `evals` | 36 | 34 behavioural cases plus the aggregate gate |
+| `evals` | 37 | 35 behavioural cases plus the aggregate gate |
 
 All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
 (gate 0.90) · tool-argument match 1.00 (gate 0.95).
 
-**Against the running stack — 66 tests, `pytest tests/e2e -m e2e`:**
+**Against the running stack — 68 tests, `pytest tests/e2e -m e2e`:**
 
 Confirmed live: the graded health body; RAG answering with a real section
 citation; the exclusion stated plainly; a claim looked up from the seeded
@@ -263,7 +263,7 @@ headlessly. See the [walkthrough](docs/walkthrough.md#voice-the-webrtc-gate).
 
 **Against real models — `make eval-live`:**
 
-The same 34 cases, over HTTP against the running stack. Run on both a local
+The same 35 cases, over HTTP against the running stack. Run on both a local
 model and a hosted one:
 
 | Metric | Ollama `qwen2.5:7b` | Groq `gpt-oss-120b` | Gate |
@@ -274,7 +274,7 @@ model and a hosted one:
 | Tool-selection accuracy | **1.00** | **1.00** | 0.90 |
 | No unconfirmed writes | **1.00** | **1.00** | 1.00 |
 | Injection block rate | **1.00** | **1.00** | 1.00 |
-| Cases | **33 / 34** | 28 / 29 | — |
+| Cases | **34 / 35** | 28 / 29 | — |
 | Wall clock | 126 s | 603 s | — |
 
 **33/34 on Ollama, every gate at 1.00.** Scores move between sweeps of the
@@ -435,7 +435,7 @@ doing so rather than trusting a green in-process suite:
 
 `git clone` then `docker compose up --build`, with no `.env` and no key: eight
 containers, the frontend on :3000, the graded health body, and coverage answers
-with real citations from real embeddings. Then `pytest` — 410 pass, and the e2e
+with real citations from real embeddings. Then `pytest` — 430 pass, and the e2e
 tests skip rather than fail when no stack is running. A GitHub Actions workflow
 (`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
 up` proving the graded contract with no credentials.

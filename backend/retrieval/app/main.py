@@ -86,6 +86,25 @@ async def search(request: SearchPolicyArgs) -> SearchResponse:
     )
 
 
+@app.get("/api/v1/sections", tags=["search"])
+async def sections() -> list[dict[str, str]]:
+    """Every indexed section, in full.
+
+    Search answers "what is relevant to this question"; this answers "what does
+    the policy say", which is a different question and the one a rule check
+    needs. A coverage cap must be read from the section that governs the claim,
+    not from whichever section an embedder ranked first - it puts Personal
+    Property above Home Water Damage for "what is my deductible?", and a cap
+    taken from the wrong section would refuse a valid claim while quoting a
+    figure that does not govern it.
+    """
+    index: HybridIndex = app.state.index
+    return [
+        {"section_title": c.section_title, "text": c.text, "source_file": c.source_file}
+        for c in index.chunks
+    ]
+
+
 @app.post("/api/v1/ingest", response_model=IngestResponse, tags=["admin"])
 async def ingest() -> IngestResponse:
     """Re-read the source directory. Called by `make seed` after editing a

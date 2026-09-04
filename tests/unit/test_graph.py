@@ -88,8 +88,15 @@ def both_sections() -> StubSearcher:
     return StubSearcher([SECTION_1, SECTION_2])
 
 
+async def policy_sections() -> list[tuple[str, str]]:
+    """What the retrieval service serves from the indexed document."""
+    return [(SECTION_1.section_title, SECTION_1.text),
+            (SECTION_2.section_title, SECTION_2.text)]
+
+
 def make(llm: FakeLLM, repo, searcher, **kw):
-    tools = [build_policy_tool(searcher), *build_claims_tools(repo)]
+    tools = [build_policy_tool(searcher),
+             *build_claims_tools(repo, sections=policy_sections)]
     return build_graph(llm, tools, checkpointer=InMemorySaver(), **kw)
 
 
@@ -991,3 +998,133 @@ async def test_the_refusal_names_what_is_missing(repo, searcher) -> None:
     message = out["messages"][-1].content.lower()
     assert "amount" in message
     assert "estimate" in message or "how much" in message or "figure" in message
+
+
+# --------------------------------------------- the policy's own coverage cap
+
+async def test_a_claim_above_the_policy_limit_is_not_written(repo, searcher) -> None:
+    """Section 1 covers water damage up to $25,000. A claim for $250,000 - ten
+    times the limit - was filed without comment, because the only thing
+    checking the amount was a model doing arithmetic in its head.
+
+    The figure comes from the policy document, so editing the policy changes
+    the rule and nothing in the code needs to know what the limits are.
+    """
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092", "claim_type": "Water Damage",
+            "amount": "250000.00",
+            "description": "A pipe burst and flooded the whole house.",
+        }),
+        TextTurn("relaying the refusal"),
+    ])
+    graph = make(llm, repo, searcher)
+    config = cfg()
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content=
+            "file a water damage claim on POL-1092 for $250,000 - a burst pipe")],
+         "user_id": "usr_123", "channel": "text"},
+        config,
+    )
+    await graph.ainvoke(Command(resume="yes"), config)
+
+    assert await repo.list_ids() == ["CLM-8821", "CLM-9014"], "an over-limit claim was filed"
+
+
+async def test_the_refusal_quotes_the_policy(repo, searcher) -> None:
+    """"Your policy covers this up to $25,000" is checkable by the
+    policyholder. "The limit is $25,000" is one more assertion, which is what
+    this whole layer exists to avoid."""
+    tools = build_claims_tools(repo, sections=policy_sections)
+    submit = next(t for t in tools if t.name == "submit_claim")
+
+    out = await submit.ainvoke({
+        "policy_number": "POL-1092", "claim_type": "Water Damage",
+        "amount": "250000.00", "description": "A pipe burst and flooded the house.",
+    })
+
+    assert out["filed"] is False
+    assert out["error"] == "over_policy_limit"
+    assert out["limit"] == 25000.0
+    assert "Section 1" in out["section"]
+    assert "covered up to" in out["policy_says"].lower()
+
+
+async def test_a_claim_within_the_limit_is_written(repo, searcher) -> None:
+    """The cap must not obstruct an ordinary claim."""
+    tools = build_claims_tools(repo, sections=policy_sections)
+    submit = next(t for t in tools if t.name == "submit_claim")
+
+    out = await submit.ainvoke({
+        "policy_number": "POL-1092", "claim_type": "Water Damage",
+        "amount": "24999.00", "description": "A pipe burst in the kitchen.",
+    })
+
+    assert out["confirmation_id"].startswith("CLM-")
+
+
+async def test_a_claim_type_the_policy_does_not_cap_is_allowed(repo) -> None:
+    """Fails open. "Liability" appears nowhere in this policy, and refusing a
+    claim against a limit we could not find would be worse than not checking -
+    the confirmation gate still applies."""
+    tools = build_claims_tools(repo, sections=policy_sections)
+    submit = next(t for t in tools if t.name == "submit_claim")
+
+    out = await submit.ainvoke({
+        "policy_number": "POL-1092", "claim_type": "Liability",
+        "amount": "80000.00", "description": "A visitor was injured on the property.",
+    })
+
+    assert out["confirmation_id"].startswith("CLM-")
+
+
+async def test_an_unreadable_policy_does_not_block_a_claim(repo) -> None:
+    """If the document cannot be read, the check is skipped rather than
+    failing closed: refusing a claim on a limit that could not be verified is
+    the worse error."""
+    async def unavailable() -> list[tuple[str, str]]:
+        return []
+
+    tools = build_claims_tools(repo, sections=unavailable)
+    submit = next(t for t in tools if t.name == "submit_claim")
+
+    out = await submit.ainvoke({
+        "policy_number": "POL-1092", "claim_type": "Water Damage",
+        "amount": "250000.00", "description": "A pipe burst and flooded the house.",
+    })
+
+    assert out["confirmation_id"].startswith("CLM-")
+
+
+async def test_a_declined_tool_call_is_not_reported_as_ok(repo, searcher) -> None:
+    """The chip is the policyholder's evidence of what happened. An over-limit
+    claim was refused and still showed a green `submit_claim ok`, which reads
+    as "filed"."""
+    llm = FakeLLM([
+        ToolTurn("submit_claim", {
+            "policy_number": "POL-1092", "claim_type": "Water Damage",
+            "amount": "250000.00", "description": "A pipe burst and flooded the house.",
+        }),
+        TextTurn("relaying the refusal"),
+    ])
+    graph = make(llm, repo, searcher)
+    config = cfg()
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content=
+            "file a water damage claim on POL-1092 for $250,000 - a burst pipe")],
+         "user_id": "usr_123", "channel": "text"},
+        config,
+    )
+    out = await graph.ainvoke(Command(resume="yes"), config)
+
+    call = next(t for t in out["tool_invocations"] if t["name"] == "submit_claim")
+    assert call["status"] == "error", "a refused write must not read as filed"
+
+
+async def test_a_successful_tool_call_is_still_ok(repo, searcher) -> None:
+    llm = FakeLLM([
+        ToolTurn("get_claim_status", {"claim_id": "CLM-8821"}),
+        TextTurn("Claim CLM-8821 is Approved."),
+    ])
+    out = await run(make(llm, repo, searcher), "status of CLM-8821?")
+    assert out["tool_invocations"][0]["status"] == "ok"

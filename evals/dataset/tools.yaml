@@ -153,3 +153,20 @@
     contains_any: ["do not need", "don't need", "not need", "no appraisal",
                    "not required", "under", "below", "less than"]
     must_not_contain: ["exceeds $2,500", "exceeds $2500"]
+
+# Section 1 covers water damage up to $25,000. A claim for ten times that was
+# filed without comment, because the only thing checking the amount was a model
+# doing arithmetic in its head. The cap is now read from the policy document
+# and compared in code.
+
+- id: EV-40
+  bucket: tool_selection
+  message: "File a water damage claim on POL-1092 for $250,000 - a burst pipe flooded the whole house."
+  followup: "yes"
+  expect:
+    tools_called: ["submit_claim"]
+    # The point is that confirming does not file it: the graph pauses, the
+    # policyholder says yes, and the cap read from Section 1 still refuses the
+    # write. Asserting only `requires_confirmation` would pass without ever
+    # reaching the check.
+    claim_written: false

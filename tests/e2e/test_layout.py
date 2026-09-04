@@ -290,3 +290,45 @@ def test_reading_back_through_history_is_not_interrupted(page) -> None:
 
     top = page.evaluate("() => document.getElementById('thread').scrollTop")
     assert top < 200, f"the reader was dragged down to {top}px"
+
+
+# ----------------------------------------------------------- starting over
+
+def test_reset_clears_the_thread_and_the_conversation(page) -> None:
+    """A reset that only wipes the screen is worse than none: the agent keeps
+    the thread, so the next message still lands in the old conversation and the
+    assistant answers with context the policyholder can no longer see."""
+    page.evaluate(
+        """() => {
+            window.OmniCare.conversationId = 'cnv_previous';
+            window.OmniCare.addMessage('user', 'My television was stolen.');
+            window.OmniCare.addMessage('assistant', 'Sorry to hear that.');
+        }"""
+    )
+    before = page.evaluate("() => document.querySelectorAll('.msg').length")
+    assert before >= 3, "the greeting plus the two added messages"
+
+    page.click("#reset")
+    page.wait_for_timeout(250)
+
+    assert page.evaluate("() => document.querySelectorAll('.msg').length") == 1, (
+        "only the opening greeting should remain"
+    )
+    assert page.evaluate("() => window.OmniCare.conversationId") in (None, ""), (
+        "the next message must start a new conversation"
+    )
+
+
+def test_reset_leaves_the_page_usable(page) -> None:
+    fill_thread(page, 8)
+    page.click("#reset")
+    page.wait_for_timeout(250)
+
+    box = page.evaluate(
+        """() => {
+            const r = document.getElementById('composer').getBoundingClientRect();
+            return {h: r.height, bottom: r.bottom};
+        }"""
+    )
+    assert box["h"] > 0 and box["bottom"] <= 701
+    assert page.evaluate("() => document.getElementById('input').value") == ""

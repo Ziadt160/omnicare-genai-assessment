@@ -14,6 +14,7 @@ guesses noticeably less often.
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -21,6 +22,7 @@ from langchain_core.tools import StructuredTool
 from libs.contracts import Claim, GetClaimStatusArgs, SubmitClaimArgs
 from libs.errors import ClaimNotFound
 from libs.guardrails.normalize import phonetic_readback
+from libs.policy.rules import coverage_limit_for
 from libs.ports.claims import ClaimsRepository
 from libs.resilience.policy import idempotency_key
 
@@ -49,6 +51,7 @@ def build_claims_tools(
     *,
     user_id: str = "anonymous",
     turn: int = 0,
+    sections: Callable[[], Awaitable[list[tuple[str, str]]]] | None = None,
 ) -> list[StructuredTool]:
     """Bind the claims tools to a repository instance.
 
@@ -57,6 +60,11 @@ def build_claims_tools(
     the in-memory one without patching.
 
     Args:
+        sections: Optional provider of the policy's sections. When present,
+            a claim above the cap the policy states for its type is
+            refused before anything is written. Omitted, the check is
+            simply not performed - it never blocks on a limit it could
+            not read.
         idempotency: Optional store. When present, a repeated submit_claim with
             identical arguments on the same turn returns the original
             confirmation ID instead of filing a second claim. Without it a
@@ -119,6 +127,41 @@ def build_claims_tools(
             amount=amount,
             description=description,
         )
+
+        # The policy's own cap, checked in code. A claim for $250,000 against a
+        # section covering $25,000 was filed without comment - ten times the
+        # limit - because the only thing checking the amount was a model doing
+        # arithmetic in its head, and the same model told a policyholder that
+        # $1,500 "exceeds $2,500". Neither is a judgement worth delegating.
+        #
+        # The figure comes from the policy document, so editing the policy
+        # changes the rule and nothing here needs to know what the limits are.
+        # If the policy states no cap for this claim type, or the document
+        # cannot be read, the claim proceeds: refusing on a limit we could not
+        # verify would be worse than not checking, and the confirmation gate
+        # still applies.
+        if sections is not None:
+            limit = coverage_limit_for(args.claim_type, await sections())
+            if limit is not None and args.amount > limit.amount:
+                return {
+                    "filed": False,
+                    "error": "over_policy_limit",
+                    "claim_type": args.claim_type,
+                    "requested": float(args.amount),
+                    "limit": float(limit.amount),
+                    "section": limit.section_title,
+                    # Quoted so the policyholder can check it, rather than
+                    # being told a number and asked to trust it.
+                    "policy_says": limit.source_text,
+                    "message": (
+                        f"That is above what the policy covers. "
+                        f"{limit.section_title} covers up to "
+                        f"${limit.amount:,.2f} and this claim is for "
+                        f"${args.amount:,.2f}. Tell the policyholder the "
+                        f"limit, quote the wording, and ask whether they want "
+                        f"to file for an amount within it."
+                    ),
+                }
 
         key = idempotency_key(user_id, "submit_claim", args.model_dump(mode="json"), turn)
         if idempotency is not None:

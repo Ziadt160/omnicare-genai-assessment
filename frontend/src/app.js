@@ -30,6 +30,7 @@ const el = {
   confirmText: document.getElementById("confirm-text"),
   confirmYes: document.getElementById("confirm-yes"),
   confirmNo: document.getElementById("confirm-no"),
+  reset: document.getElementById("reset"),
 };
 
 let socket = null;
@@ -338,6 +339,32 @@ async function send(message, { echo = true } = {}) {
   }
 }
 
+/* Starting over.
+ *
+ * Clearing the screen alone would be worse than nothing: the agent keys its
+ * memory on `conversation_id`, so the next message would still land in the old
+ * thread and come back answered with context the policyholder can no longer
+ * see. Dropping the id is what actually empties the conversation - the gateway
+ * mints a fresh one on the next turn, and the old thread is left intact rather
+ * than deleted, because a policyholder clearing their screen is not asking for
+ * their claim history to be destroyed.
+ */
+function resetConversation() {
+  conversationId = null;
+  streamingBubble = null;
+  el.confirm.hidden = true;
+  el.input.value = "";
+
+  // Keep the opening greeting: it is the page's own copy, not part of the
+  // conversation, and an empty thread reads as a broken page.
+  const messages = [...el.thread.children];
+  for (const li of messages.slice(1)) li.remove();
+
+  el.input.focus();
+}
+
+if (el.reset) el.reset.addEventListener("click", resetConversation);
+
 el.form.addEventListener("submit", (e) => {
   e.preventDefault();
   const message = el.input.value.trim();
@@ -399,6 +426,7 @@ window.OmniCare = {
   send,
   addMessage,
   handleEvent,
+  resetConversation,
   renderText,
   renderSources,
   renderToolCalls,

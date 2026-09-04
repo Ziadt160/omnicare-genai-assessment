@@ -265,7 +265,16 @@ def run_case(case: EvalCase) -> Outcome:
     searcher = BM25Searcher()
     repo = InMemoryClaimsRepo(seed=list(SEED))
     llm = FakeLLM(script_for(case, searcher))
-    tools = [build_policy_tool(searcher), *build_claims_tools(repo)]
+    async def sections() -> list[tuple[str, str]]:
+        """The indexed policy, as the retrieval service serves it - so the
+        coverage cap is read from the real document here too, not stubbed."""
+        await searcher._ready()
+        return [(c.section_title, c.text) for c in searcher.chunks]
+
+    tools = [
+        build_policy_tool(searcher),
+        *build_claims_tools(repo, sections=sections),
+    ]
     graph = build_graph(llm, tools, checkpointer=InMemorySaver(), require_confirmation=True)
 
     config = {"configurable": {"thread_id": uuid.uuid4().hex}, "recursion_limit": 30}
