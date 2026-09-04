@@ -1,9 +1,21 @@
 -r backend/requirements.txt
 
+# The voice worker installs these in its own Docker stage, not in the shared
+# base - audio and ONNX deps have no business in the gateway or agent images.
+# But tests/unit/test_voice_worker.py exercises the shim that presents the
+# agent to LiveKit as an llm.LLM, so `pytest` needs them locally. Without this
+# line a reviewer who installs this file gets a collection error.
+livekit-agents==1.7.*
+
 pytest==8.3.*
 pytest-asyncio==0.24.*
 pytest-cov==6.*
 respx==0.21.*
 testcontainers[postgres,redis]==4.8.*
+# Drives a real Chrome for the walkthrough capture and the frontend
+# renderer tests. Uses the system browser (channel="chrome"), so no
+# browser download.
+playwright==1.4*
+
 ruff==0.7.*
 mypy==1.13.*

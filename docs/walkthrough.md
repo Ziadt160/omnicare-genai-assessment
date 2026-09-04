@@ -10,10 +10,10 @@ docker compose up -d
 python scripts/capture_walkthrough.py
 ```
 
-Captured with `LLM_PROVIDER=fake`, which is why every reply is prefixed
-`(demo mode - no LLM configured)`. That prefix is the *only* thing standing in:
-the queue, the graph, retrieval, the guardrails, the confirmation flow and the
-Postgres history are all real. Set `GROQ_API_KEY` and the prefix disappears.
+Captured against **Groq `openai/gpt-oss-120b`** — these are real model answers,
+real retrieval and real tool calls. With no key configured the system still
+answers, from a keyless demo provider, and every reply says so; see
+[Run it in two minutes](../README.md#run-it-in-two-minutes).
 
 ---
 
@@ -157,6 +157,43 @@ asserts this against the live stack.
 
 ---
 
+## Voice: end to end
+
+Speech is local. Piper — a 63 MB ONNX voice baked into the image, CPU at about
+five times realtime — so the voice channel needs no account, no network and no
+quota, under the same zero-cost constraint as everything else. Groq synthesis
+is available behind `VOICE_TTS_PROVIDER=groq` if you prefer the voice and have
+accepted its terms.
+
+The worker is ears and a mouth and nothing more. `OmniCareLLM` presents the
+agent to LiveKit as an `llm.LLM`, so a spoken turn goes onto the same
+`jobs:chat` queue as a typed one and inherits injection screening, the bounded
+loop, `interrupt()` before a write and citation grounding by construction.
+There is no second prompt and no second tool loop to keep in sync.
+
+```console
+$ docker compose logs voice
+INFO omnicare.voice.tts: Piper voice loaded from en_US-amy-low.onnx at 16000 Hz
+INFO omnicare.voice: speech synthesis ready (piper): 22060 bytes at 16000 Hz
+INFO livekit.agents: registered worker
+INFO livekit.agents: received job request
+INFO omnicare.voice: serving room omnicare-vg2 for vg2
+
+$ docker compose logs livekit | grep "mediaTrack published"
+... "participant": "vg2"                     # the caller
+... "participant": "agent-AJ_cJsUqmTgJwti"   # the assistant, speaking
+```
+
+That last line is the whole thing: the assistant published a synthesised audio
+track into the room.
+
+Two details the graph adds for voice and not for chat. The identifier read-back
+is **generated in code**, not prompted — asking a 7B for a fixed format
+produced "CLM-eight eight twenty-one" about half the time, which is exactly the
+ambiguity a read-back exists to remove. And a spoken filler goes out the moment
+a tool starts, because several seconds of silence on a call reads as a dropped
+connection rather than as thinking.
+
 ## Voice: the WebRTC gate
 
 Voice is the riskiest part of the build, because WebRTC through Docker Desktop
@@ -242,16 +279,16 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 206 in-process, no container, no network
+make test        # 245 in-process, no container, no network
+pytest tests/e2e -m e2e   # 26 against the running stack
 make eval        # the behavioural gate
-pytest tests/e2e -m e2e   # 15 against the running stack
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 138 |
+| `tests/unit` | 177 |
 | `tests/contract` | 37 |
-| `tests/e2e` | 15 |
+| `tests/e2e` | 26 |
 | `evals` | 31 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·

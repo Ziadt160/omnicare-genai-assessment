@@ -46,7 +46,7 @@ function addMessage(role, text, { sources = [], toolCalls = [], pending = false 
   bubble.className = "bubble" + (pending ? " bubble--pending" : "");
 
   const body = document.createElement("p");
-  body.textContent = text;
+  body.innerHTML = renderText(text);
   bubble.appendChild(body);
 
   if (toolCalls.length) bubble.appendChild(renderToolCalls(toolCalls));
@@ -97,6 +97,27 @@ function escapeHtml(s) {
   const d = document.createElement("div");
   d.textContent = s;
   return d.innerHTML;
+}
+
+/* Models write markdown whether or not you ask them to, and gpt-oss-120b also
+   emits U+3010 as a citation marker. Rendered as plain text that surfaces as
+   literal ** and a dangling bracket in the middle of an insurance answer.
+
+   A deliberately tiny subset - bold, italic, paragraph breaks - and escaping
+   happens FIRST, so nothing the model writes can inject markup. A full
+   markdown library would be a dependency and a much larger attack surface for
+   one paragraph of prose. */
+function renderText(raw) {
+  return escapeHtml(raw)
+    // Citation markers some models emit around references, left dangling when
+    // the reference itself was stripped.
+    .replace(/[【】「」]/g, "")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s.,;:!?)]|$)/g, "$1<em>$2</em>")
+    .replace(/\n{2,}/g, "</p><p>")
+    .replace(/\n/g, "<br>")
+    .replace(/[ \t]+([.,;:!?])/g, "$1")
+    .trim();
 }
 
 function setStatus(text, kind) {
@@ -154,7 +175,10 @@ function handleEvent(evt) {
 
     case "token":
       if (!streamingBubble) streamingBubble = addMessage("assistant", "");
-      streamingBubble.textContent += evt.payload.text || "";
+      // Accumulate the raw text and re-render, rather than appending HTML:
+      // a bold marker can straddle two chunks.
+      streamingBubble.dataset.raw = (streamingBubble.dataset.raw || "") + (evt.payload.text || "");
+      streamingBubble.innerHTML = renderText(streamingBubble.dataset.raw);
       el.thread.scrollTop = el.thread.scrollHeight;
       break;
 
@@ -201,7 +225,7 @@ function showConfirmation(payload) {
      assistant said, and a conversation that jumps from the request straight to
      "Filed" reads as though nothing was asked. */
   if (streamingBubble && !streamingBubble.textContent.trim()) {
-    streamingBubble.textContent = readback;
+    streamingBubble.innerHTML = renderText(readback);
     streamingBubble = null;
   } else {
     discardEmptyBubble();

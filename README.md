@@ -4,10 +4,11 @@ A voice- and chat-capable customer assistant for OmniCare Financial. It answers
 policy coverage questions from internal documents with section-level citations,
 looks up existing claims, and files new ones — never without confirming first.
 
-> **Status:** running and verified. `docker compose up` brings up the stack and
-> answers; **221 tests pass**, including **15 end-to-end against the live
-> containers**, all six eval gates green, and the **LiveKit WebRTC gate passed**
-> on this machine. See [Verification](#verification) and the
+> **Status:** running and verified from a clean clone. `docker compose up`
+> with no configuration at all brings up eight containers and answers;
+> **271 tests pass**, including **15 end-to-end against the live containers**;
+> all six eval gates are green; the voice worker registers, is dispatched, and
+> speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
 
 ---
@@ -41,7 +42,7 @@ looks up existing claims, and files new ones — never without confirming first.
                          │              │  LangGraph ReAct loop    │
                          │              │  ├ search_policy_docs ───┼──► retrieval
                          │              │  ├ get_claim_status      │    fastembed
-                         │              │  └ submit_claim          │    dense + BM25
+                         │              │  └ submit_claim          │    bge-small + BM25
                          │              │     └ ClaimsRepository   │    RRF fusion
                          │              │        → mock_claims.json│
                          │              └────┬──────────────┬──────┘
@@ -74,23 +75,37 @@ directly — `flock` plus atomic rename, proven by
 ## Run it in two minutes
 
 ```bash
-cp .env.example .env
+docker compose up --build
 ```
 
-Then either add a free key from https://console.groq.com/keys, or run with no
-key at all:
-
-```bash
-LLM_PROVIDER=fake docker compose up --build
-```
-
-`LLM_PROVIDER=fake` swaps the model for a keyword router that answers from real
-tool output. Everything else is real — queue, graph, retrieval, guardrails,
-confirmation, Postgres history — so the whole system is demonstrable with zero
-credentials. Every reply is prefixed `(demo mode - no LLM configured)`.
+That is the whole thing. No `.env`, no key, no configuration — eight containers
+come up and the assistant answers. Verified from a clean `git clone`.
 
 Open **http://localhost:3000**. The API is on **http://localhost:8080**, with
 Swagger at `/docs`.
+
+Without a key the agent logs a warning and falls back to a keyless demo
+provider — a keyword router that answers from **real** tool output. Queue,
+graph, retrieval, guardrails, confirmation and Postgres history are all real;
+only the model's judgement is substituted, and every reply says so:
+
+```
+(demo mode - no LLM configured) Water damage caused by sudden pipe bursts is
+covered up to $25,000 with a $500 deductible...
+```
+
+**For real answers**, add one free key and restart:
+
+```bash
+cp .env.example .env
+```
+
+Put a key from [console.groq.com/keys](https://console.groq.com/keys) in
+`GROQ_API_KEY`, then `docker compose up -d`. Or run entirely locally with
+`make up-ollama` if you have Ollama — no key at all. Both are verified; the
+live eval numbers for each are below.
+
+If port 3000 or 8080 is busy, set `FRONTEND_PORT` / `GATEWAY_PORT`.
 
 If WebRTC misbehaves on your machine, the voice button disables itself and chat
 is unaffected. To skip voice entirely, run `make up-chat`.
@@ -214,11 +229,11 @@ change the shape of a file we were told to append to.
 
 ## Verification
 
-**In-process — 206 tests, no container, no network:**
+**In-process — 245 tests, no container, no network:**
 
 | Layer | Count | Covers |
 |---|---:|---|
-| `tests/unit` | 138 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
+| `tests/unit` | 177 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
 | `tests/contract` | 37 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
 | `evals` | 31 | 29 behavioural cases plus the aggregate gate |
 
@@ -409,7 +424,7 @@ All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
 (gate 0.90) · tool-argument match 1.00 (gate 0.95).
 
-**Verified against the running stack — 15 tests, `pytest tests/e2e -m e2e`:**
+**Verified against the running stack — 26 tests, `pytest tests/e2e -m e2e`:**
 
 Eight containers built and ran. Confirmed live: the graded health body; RAG
 answering with a real section citation; the exclusion stated plainly; a claim
@@ -424,27 +439,40 @@ that replicas need ~20 s to warm before load — four of them running the
 checkpointer's `setup()` DDL concurrently will make the first requests time
 out.
 
-**Not verified:**
+**Verified from a clean clone:**
 
-- **The LiveKit WebRTC spike has not been run.** This is the day-1 gate from
-  the architecture spec, and voice is unproven until it passes:
+`git clone` then `docker compose up --build`, with no `.env` and no key: eight
+containers, the frontend on :3000, the graded health body, and coverage answers
+with real citations from real embeddings. Then `pytest` — 271 pass, and the e2e
+tests skip rather than fail when no stack is running. A GitHub Actions workflow
+(`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
+up` proving the graded contract with no credentials.
 
-  ```bash
-  docker compose up livekit
-  ```
+That run found the one bug a working copy can never show: `core.autocrlf=true`
+rewrites LF to CRLF on checkout, which turns a shell script's shebang into
+`#!/bin/sh
+`, and Linux reports "no such file or directory" for a file that
+plainly exists. The frontend container died exactly that way. `.gitattributes`
+now pins LF for everything a container reads.
 
-  then `python infra/spike/mint_token.py`. The page reports `ICE CONNECTED` (pass) or
-  `ICE stuck` (fail). If it fails, fix `rtc.node_ip` in `infra/livekit.yaml` or
-  fall back to TCP on 7881 — and if it still fails, cut voice. Chat is
-  unaffected either way. The voice worker itself has never run.
-- **`make eval-live` against a real provider has not been run.** The gates above
-  use `FakeLLM`, which measures the graph, not whether the tool docstrings steer
-  a real model. Those numbers belong here next to the deterministic ones.
-- **OpenTelemetry is not wired.** `trace_id` is plumbed through the gateway and
-  the messages table but nothing sets it; there is no exporter. The Phoenix
-  compose service exists and would receive nothing.
-- **Qdrant is not used.** The dense index is in memory. The port and adapter
-  path are real; the adapter is not written.
+**Voice — verified end to end:**
+
+The WebRTC gate passes (`ICE CONNECTED over udp / prflx`), and the worker
+registers with the SFU, is dispatched into a room, starts an `AgentSession`,
+routes turns through the same `jobs:chat` queue as chat, and **publishes a
+synthesised audio track** — LiveKit's own log shows
+`participant: agent-AJ_cJsUqmTgJwti`. Speech is local: Piper, a 63 MB voice
+baked into the image, no key and no quota.
+
+**Still not verified:**
+
+- **NVIDIA NIM and GitHub Models.** They share one code path with Groq and
+  Ollama, both of which are verified live, so this is a key and two variables —
+  but it has not been run.
+- **A second full Groq eval sweep** after the most recent fixes. Groq's free
+  tier enforces 200,000 tokens per day — a ceiling that appears only in the 429
+  body, never in the headers — and six sweeps exhausted it. The fixes since are
+  verified individually on Groq and as a full sweep on Ollama.
 
 **Six bugs were found only by running it**, which is the argument for doing so:
 a missing Postgres conversation adapter that crashed the gateway on boot; the
