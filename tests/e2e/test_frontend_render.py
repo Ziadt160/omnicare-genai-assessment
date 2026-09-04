@@ -48,7 +48,13 @@ def render():
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(channel="chrome", headless=True)
+        try:
+            browser = pw.chromium.launch(channel="chrome", headless=True)
+        except Exception as exc:
+            # Skip rather than fail where there is no system Chrome. A missing
+            # browser says nothing about the renderer, and the rest of the e2e
+            # suite is still worth running.
+            pytest.skip(f"no system Chrome to drive: {exc}")
         page = browser.new_page()
         page.goto(FRONTEND, wait_until="networkidle")
 

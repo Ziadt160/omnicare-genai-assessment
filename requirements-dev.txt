@@ -14,8 +14,9 @@ respx==0.21.*
 testcontainers[postgres,redis]==4.8.*
 # Drives a real Chrome for the walkthrough capture and the frontend
 # renderer tests. Uses the system browser (channel="chrome"), so no
-# browser download.
-playwright==1.4*
+# browser download - and the tests skip themselves where there is no
+# Chrome to drive.
+playwright==1.*
 
 ruff==0.7.*
 mypy==1.13.*
