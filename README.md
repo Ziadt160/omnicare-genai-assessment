@@ -8,7 +8,7 @@ looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **361 tests pass**, including **66 end-to-end against the live containers**;
+> **371 tests pass**, including **66 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -231,11 +231,11 @@ change the shape of a file we were told to append to.
 
 ## Verification
 
-**In-process — 295 tests, no container, no network:**
+**In-process — 305 tests, no container, no network:**
 
 | Layer | Count | Covers |
 |---|---:|---|
-| `tests/unit` | 214 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
+| `tests/unit` | 224 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
 | `tests/contract` | 47 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
 | `evals` | 34 | 32 behavioural cases plus the aggregate gate |
 
@@ -277,8 +277,14 @@ model and a hosted one:
 | Cases | **32 / 32** | 28 / 29 | — |
 | Wall clock | 137 s | 603 s | — |
 
-**32/32 on Ollama, every gate at 1.00.** Two things stated plainly rather than
-left to be inferred.
+**32/32 on Ollama, every gate at 1.00** — on a good run. A second sweep of the
+same build scored 30/32, and the two that waver are `EV-24` and `EV-27`; run
+individually both behave correctly. That is a 7B's instruction-following
+variance, not a regression, and it is the reason the gates are thresholds
+rather than exact scores. Reporting only the better run would misrepresent what
+a reviewer will see.
+
+Two more things stated plainly rather than left to be inferred.
 
 The Groq column is **older**: 29 cases, measured before the last several fixes,
 and not re-measured because the free tier's **200,000 tokens-per-day** budget
@@ -425,7 +431,7 @@ doing so rather than trusting a green in-process suite:
 
 `git clone` then `docker compose up --build`, with no `.env` and no key: eight
 containers, the frontend on :3000, the graded health body, and coverage answers
-with real citations from real embeddings. Then `pytest` — 361 pass, and the e2e
+with real citations from real embeddings. Then `pytest` — 371 pass, and the e2e
 tests skip rather than fail when no stack is running. A GitHub Actions workflow
 (`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
 up` proving the graded contract with no credentials.

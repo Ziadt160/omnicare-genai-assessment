@@ -38,6 +38,21 @@ SECTION_1 = Chunk(
 )
 CITATION_1 = "sample_policy.md § Section 1: Home Water Damage Coverage"
 
+SECTION_2 = Chunk(
+    chunk_id="sample_policy.md::section-2",
+    text=(
+        "Section 2: Personal Property Protection\n\n"
+        "Electronics, furniture, and jewelry are covered up to $10,000 total. "
+        "Single items exceeding $2,500 require individual appraisal receipts."
+    ),
+    source_file="sample_policy.md",
+    section_id="section-2",
+    section_title="Section 2: Personal Property Protection",
+    char_start=231,
+    char_end=390,
+)
+CITATION_2 = "sample_policy.md § Section 2: Personal Property Protection"
+
 SEED = [
     Claim(claim_id="CLM-8821", policy_number="POL-1092", claim_type="Water Damage",
           status="Approved", amount="3500.00"),
@@ -64,6 +79,13 @@ def repo() -> InMemoryClaimsRepo:
 @pytest.fixture()
 def searcher() -> StubSearcher:
     return StubSearcher([SECTION_1])
+
+
+@pytest.fixture()
+def both_sections() -> StubSearcher:
+    """What the real index does: the policy has two sections and `top_k` is 3,
+    so every search returns the whole document whatever was asked."""
+    return StubSearcher([SECTION_1, SECTION_2])
 
 
 def make(llm: FakeLLM, repo, searcher, **kw):
@@ -510,3 +532,192 @@ async def test_readback_is_skipped_when_there_is_no_identifier(repo, searcher) -
         make(llm, repo, searcher), "what does my policy cover", channel="voice"
     )
     assert not out["messages"][-1].content.startswith("Looking up")
+
+
+# ------------------------------------------- citing only what the answer used
+
+async def test_only_the_section_the_answer_names_is_cited(repo, both_sections) -> None:
+    """The policy has two sections and retrieval returns both for any question,
+    so an answer about a burst pipe used to be filed under Personal Property as
+    well - two citations for a one-section answer.
+
+    `ground` already extracted what the model cited and checked it against what
+    was retrieved; it just discarded the result and reported everything. The
+    intersection is what makes this safe: a section the model names but
+    retrieval never returned cannot be cited, so the worst case is citing too
+    much, never citing something the model did not see.
+    """
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn(
+            "Under Section 1: Home Water Damage Coverage, a sudden pipe burst "
+            "is covered up to $25,000 with a $500 deductible. Gradual leaks and "
+            "flood damage are excluded."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert out["sources"] == [CITATION_1], "Personal Property was not used"
+
+
+async def test_both_are_cited_when_the_answer_uses_both(repo, both_sections) -> None:
+    """The case that rules out simply taking the top section: a burst pipe that
+    destroys belongings genuinely spans both, with two different limits."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe damaged electronics"}),
+        TextTurn(
+            "Section 1: Home Water Damage Coverage covers the water damage up "
+            "to $25,000. Your television and sofa fall under Section 2: "
+            "Personal Property Protection, capped at $10,000."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst ruined my TV.")
+
+    assert set(out["sources"]) == {CITATION_1, CITATION_2}
+
+
+async def test_an_unnamed_answer_is_attributed_by_its_figures(
+    repo, both_sections
+) -> None:
+    """qwen2.5 often answers "covered up to $25,000 with a $500 deductible"
+    without naming the section at all. Both amounts belong to Section 1 and to
+    nothing else retrieved, so the answer is attributable even though the model
+    never said where it came from."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn("Yes - that is covered up to $25,000 with a $500 deductible."),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert out["sources"] == [CITATION_1]
+
+
+async def test_an_answer_with_neither_a_name_nor_a_figure_cites_everything(
+    repo, both_sections
+) -> None:
+    """The fallback, and the reason this can never regress to zero sources.
+
+    Nothing in "yes, that is covered" says which section it came from. The
+    answer is still grounded - it was produced from retrieved text - and a
+    coverage answer showing no source at all is exactly the failure this layer
+    exists to prevent, so everything consulted is reported.
+    """
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn("Yes, that is covered under your policy."),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert set(out["sources"]) == {CITATION_1, CITATION_2}
+
+
+async def test_naming_a_section_that_was_never_retrieved_cites_nothing_extra(
+    repo, both_sections
+) -> None:
+    """The safety property. Attribution reads what the model wrote, so it must
+    never let the model widen the citation set."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "earthquake"}),
+        TextTurn(
+            "Section 1: Home Water Damage Coverage does not cover this, and "
+            "Section 9: Earthquake Coverage would."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "Is earthquake damage covered?")
+
+    # Section 9 cannot be cited because it was never retrieved. The prose is
+    # left alone here on purpose: stripping a bare section name out of the
+    # middle of a sentence mangles it, and removing a parenthetical citation -
+    # which is the form a fabricated *citation* takes - is a separate job, done
+    # by `_CITATION_RE` and covered by test_invented_citations_are_stripped.
+    assert out["sources"] == [CITATION_1]
+    assert CITATION_2 not in out["sources"]
+
+
+async def test_a_section_named_in_prose_is_recognised(repo, both_sections) -> None:
+    """Measured against qwen2.5: models name a section the way a person would -
+    "under the Personal Property Protection section" - far more often than they
+    reproduce the heading verbatim. Matching only the exact heading fell back to
+    citing everything on most real answers, which defeats the point."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "jewelry theft"}),
+        TextTurn(
+            "Jewelry is covered up to $10,000 under the Personal Property "
+            "Protection section, and single items over $2,500 need an appraisal."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "Is jewelry covered if stolen?")
+
+    assert out["sources"] == [CITATION_2]
+
+
+async def test_a_bare_section_number_is_recognised(repo, both_sections) -> None:
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn("Section 1 covers this up to $25,000 with a $500 deductible."),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert out["sources"] == [CITATION_1]
+
+
+async def test_a_quoted_figure_cites_its_section_even_if_unnamed(
+    repo, both_sections
+) -> None:
+    """The failure that names-only attribution produced, caught by the live
+    stack: qwen2.5 quoted Section 1's $25,000 and $500 while naming only
+    Personal Property, so the water-damage answer was credited entirely to the
+    wrong section. A figure with no source behind it is precisely what this
+    layer exists to prevent, so an amount that belongs to one retrieved section
+    cites it whether or not the model said its name."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn(
+            "A burst pipe is covered up to $25,000 with a $500 deductible. "
+            "For personal property, the Personal Property Protection section "
+            "applies."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert CITATION_1 in out["sources"], "the $25,000 came from Section 1"
+    assert set(out["sources"]) == {CITATION_1, CITATION_2}
+
+
+async def test_a_figure_shared_by_two_sections_attributes_neither(
+    repo
+) -> None:
+    """Only a figure unique to one retrieved section is evidence. A limit two
+    sections happen to share proves nothing about which one was used."""
+    from libs.contracts import Chunk
+
+    twin = Chunk(
+        chunk_id="sample_policy.md::section-9",
+        text="Section 9: Other Cover. Also capped at $25,000 in total.",
+        source_file="sample_policy.md",
+        section_id="section-9",
+        section_title="Section 9: Other Cover",
+        char_start=0,
+        char_end=60,
+    )
+    searcher = StubSearcher([SECTION_1, twin])
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "limit"}),
+        TextTurn("The limit is $25,000."),
+    ])
+    out = await run(make(llm, repo, searcher), "What is the limit?")
+
+    # Neither is attributable, so the honest answer is everything consulted.
+    assert len(out["sources"]) == 2
+
+
+async def test_a_small_number_is_not_treated_as_a_figure(repo, both_sections) -> None:
+    """Section numbers, item counts and years are not policy amounts. Without
+    a floor, "2 items" would credit Section 2."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn("Section 1 covers this. You mentioned 2 damaged items."),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    assert out["sources"] == [CITATION_1]
