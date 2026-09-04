@@ -1,12 +1,14 @@
 # OmniCare Policyholder Assistant
 
+[![CI](https://github.com/Ziadt160/omnicare-genai-assessment/actions/workflows/ci.yml/badge.svg)](https://github.com/Ziadt160/omnicare-genai-assessment/actions/workflows/ci.yml)
+
 A voice- and chat-capable customer assistant for OmniCare Financial. It answers
 policy coverage questions from internal documents with section-level citations,
 looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **271 tests pass**, including **15 end-to-end against the live containers**;
+> **271 tests pass**, including **26 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -241,7 +243,7 @@ All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
 (gate 0.90) · tool-argument match 1.00 (gate 0.95).
 
-**Against the running stack — 15 tests, `pytest tests/e2e -m e2e`:**
+**Against the running stack — 26 tests, `pytest tests/e2e -m e2e`:**
 
 Confirmed live: the graded health body; RAG answering with a real section
 citation; the exclusion stated plainly; a claim looked up from the seeded
@@ -324,10 +326,11 @@ Three genuine bugs, none of which the scripted suite could have surfaced:
 
 2. **The tier-1 phonetic readback was never performed.** The graph computed the
    confirmation tier from `docs/adr/0007` and nothing told the model to act on
-   it. A voice addendum to the system prompt now does. It is roughly half
-   reliable on a 7B ("CLM-eight eight twenty-one"); a fixed format needs to be
-   generated in code from `phonetic_readback()` rather than prompted, which is
-   the correct fix and is not yet made.
+   it. Prompting for it was roughly half reliable on a 7B ("CLM-eight eight
+   twenty-one"), which is exactly the ambiguity a read-back exists to remove,
+   so the format is now **generated in code** by `phonetic_readback()` in a
+   dedicated `readback` node rather than asked for. A fixed format is not
+   something to request from a model that may decline to produce it.
 
 3. **The egress limiter counted the wrong thing — three times over.** Groq
    enforces *three* separate ceilings, and only two of them appear in response
@@ -377,15 +380,13 @@ the phrasing of the denial. Chasing phrasing is fitting the eval to the model.
 
 **Still not verified:**
 
-- **Voice speaks nothing until Groq's TTS terms are accepted.** Everything else
-  in the pipeline is now proven: the worker **registers** with the SFU, is
-  **dispatched** into a room, starts an `AgentSession`, routes the turn through
-  the same `jobs:chat` queue as chat, and reaches synthesis. Synthesis then
-  returns 400 — `canopylabs/orpheus-v1-english` needs a one-time terms
-  acceptance by the org admin at
+- **Groq's hosted TTS**, specifically. `canopylabs/orpheus-v1-english` returns
+  400 until an org admin accepts its terms at
   [console.groq.com](https://console.groq.com/playground?model=canopylabs%2Forpheus-v1-english).
-  The worker probes the endpoint at startup and logs exactly that, rather than
-  registering healthy and going silent mid-call.
+  That is what moved synthesis to **Piper**, which is local, needs no account
+  and is now the default — so this blocks nothing. Voice is verified end to end
+  on Piper; see below. The worker still probes its TTS endpoint at startup and
+  logs the reason, rather than registering healthy and going silent mid-call.
 
   STT is verified working: `whisper-large-v3-turbo` transcribes, and returns
   `avg_logprob` and `no_speech_prob` — the confidence signals ADR 0007's tier
@@ -414,30 +415,6 @@ doing so rather than trusting a green in-process suite:
 | LiveKit gate | `infra/spike/token.py` shadowed the stdlib `token` module |
 | Screenshots | An empty streaming bubble left on screen when a turn ends in a confirmation |
 | Screenshots | The multi-target Dockerfile consolidation had silently no-op'd |
-
----|---:|---|
-| `tests/unit` | 103 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, and the whole agent graph on `FakeLLM` |
-| `tests/contract` | 37 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest |
-| `evals` | 31 | 29 behavioural cases plus the aggregate gate |
-
-All six gates green: citation precision 1.00 · exclusion recall 1.00 ·
-injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
-(gate 0.90) · tool-argument match 1.00 (gate 0.95).
-
-**Verified against the running stack — 26 tests, `pytest tests/e2e -m e2e`:**
-
-Eight containers built and ran. Confirmed live: the graded health body; RAG
-answering with a real section citation; the exclusion stated plainly; a claim
-looked up from the seeded volume; fuzzy recovery on an unknown claim ID; a
-write pausing and then resuming **across two separate HTTP requests** through
-the Postgres checkpointer; a declined confirmation writing nothing; injection
-refused with zero tool calls; and history readable back from Postgres.
-
-`docker compose up --scale agent=4` distributes work across the consumer group:
-eight concurrent requests, all 200, 3.3 s to 13.1 s as two waves cleared. Note
-that replicas need ~20 s to warm before load — four of them running the
-checkpointer's `setup()` DDL concurrently will make the first requests time
-out.
 
 **Verified from a clean clone:**
 
@@ -473,43 +450,6 @@ baked into the image, no key and no quota.
   tier enforces 200,000 tokens per day — a ceiling that appears only in the 429
   body, never in the headers — and six sweeps exhausted it. The fixes since are
   verified individually on Groq and as a full sweep on Ollama.
-
-**Six bugs were found only by running it**, which is the argument for doing so:
-a missing Postgres conversation adapter that crashed the gateway on boot; the
-Postgres checkpointer being an async context manager rather than a saver;
-per-turn state bleeding across turns so a refusal reported the previous turn's
-tool calls; the claims volume mounting empty because nothing copied the fixture
-in; a stale "backend unreachable" banner left by one transient probe; and
-Docker Desktop binding `::1` without proxying it, so `localhost` hung on every
-request until the ports were pinned to IPv4.
-
----|---:|---|
-| `tests/unit` | 90 | Chunking, RRF, BM25, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, and the full agent graph driven by `FakeLLM` |
-| `tests/contract` | 37 | The graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest |
-| `evals` | 31 | 29 behavioural cases plus the aggregate gate |
-
-All six gates green: citation precision 1.00, exclusion recall 1.00, injection
-block rate 1.00, unconfirmed writes 1.00, tool selection 1.00 (gate 0.90), tool
-argument match 1.00 (gate 0.95).
-
-**Not yet verified — needs Docker, a Groq key, or a microphone:**
-
-- `docker compose up` has not been run. The Dockerfile, compose file and
-  healthchecks are written but unexecuted.
-- **The LiveKit WebRTC spike has not been run.** This is the day-1 gate from the
-  architecture spec, and voice should be considered unproven until it passes:
-
-  ```bash
-  docker compose up livekit
-  python infra/spike/mint_token.py
-  ```
-
-  The page reports `ICE CONNECTED` (gate passed) or `ICE stuck` (gate failed).
-  If it fails, fix `rtc.node_ip` in `infra/livekit.yaml` or fall back to TCP on
-  7881 — and if it still fails, cut voice. Chat is unaffected either way.
-- `make eval-live` against a real provider has not been run. The numbers belong
-  in this section next to the deterministic gates above; publishing both is a
-  stronger claim than either alone.
 
 The FakeLLM evals measure the **graph** — guard, routing, grounding,
 confirmation — because that is the part that is ours and must never regress.
