@@ -465,14 +465,14 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 342 in-process, no container, no network
+make test        # 344 in-process, no container, no network
 pytest tests/e2e -m e2e   # 66 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 259 |
+| `tests/unit` | 261 |
 | `tests/contract` | 47 |
 | `tests/e2e` | 66 |
 | `evals` | 36 |
