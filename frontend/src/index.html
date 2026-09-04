@@ -34,18 +34,6 @@
       </li>
     </ol>
 
-    <!-- The call surface. A conversation over audio has nothing on screen to
-         say whether the assistant is listening, working or talking; the orb is
-         driven by the actual audio, so if it moves, media is flowing. -->
-    <div id="voice-panel" class="voice" hidden>
-      <canvas id="voice-orb" class="voice__orb" width="240" height="240"
-              role="img" aria-label="Voice activity"></canvas>
-      <p id="voice-phase" class="voice__phase" aria-live="polite">Listening</p>
-      <p id="voice-caption" class="voice__caption"></p>
-      <button id="voice-hangup" class="btn voice__end" type="button">End call</button>
-      <p class="voice__note">Everything said on the call is written into the conversation above.</p>
-    </div>
-
     <!-- Shown when the graph pauses before an irreversible write. -->
     <div id="confirm" class="confirm" hidden>
       <p id="confirm-text" class="confirm__text"></p>
@@ -69,6 +57,39 @@
            aria-label="Message">
     <button id="send" class="btn btn--primary" type="submit">Send</button>
   </form>
+
+  <!-- The call surface. A conversation over audio has nothing on screen to say
+       whether the assistant is listening, working or talking; the orb is driven
+       by the actual audio, so if it moves, media is flowing. -->
+  <section id="voice-panel" class="voice" hidden aria-label="Voice call">
+    <div class="voice__bar">
+      <button id="voice-back" class="voice__back" type="button">
+        <span aria-hidden="true">&#8592;</span> Back to chat
+      </button>
+      <span id="voice-elapsed" class="voice__elapsed" aria-hidden="true">0:00</span>
+    </div>
+
+    <div class="voice__stage">
+      <canvas id="voice-orb" class="voice__orb" width="260" height="260"
+              role="img" aria-label="Voice activity"></canvas>
+      <p id="voice-phase" class="voice__phase" aria-live="polite">Listening</p>
+      <p id="voice-caption" class="voice__caption"></p>
+    </div>
+
+    <div class="voice__actions">
+      <button id="voice-hangup" class="btn btn--stop" type="button">End call</button>
+      <p class="voice__note">
+        Everything said is written into the conversation, so you can read it back later.
+      </p>
+    </div>
+  </section>
+
+  <!-- Shown only while a call is running and the caller has gone back to the
+       chat. Without it, a minimised call is a call you cannot get back to. -->
+  <button id="voice-return" class="voice-return" type="button" hidden>
+    <span class="voice-return__dot" aria-hidden="true"></span>
+    <span>Call in progress &middot; tap to return</span>
+  </button>
 
   <p class="foot">
     Prototype. Answers cite the policy document; claims are never filed without

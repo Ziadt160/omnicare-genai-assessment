@@ -16,7 +16,13 @@ import pytest
 
 from libs.contracts import RunEvent
 from voice.app.agent_llm import TOOL_FILLERS, OmniCareLLM, _AgentStream
-from voice.app.worker import browser_message, normalize_transcript
+from voice.app.settings import VoiceSettings
+from voice.app.worker import (
+    LIBRARY_MIN_DELAY,
+    browser_message,
+    endpointing_options,
+    normalize_transcript,
+)
 
 CITATION = "sample_policy.md § Section 1: Home Water Damage Coverage"
 
@@ -304,3 +310,41 @@ def test_a_fully_configured_worker_reports_no_problems() -> None:
     from voice.app.worker import check_config
 
     assert check_config(VoiceSettings(**BASE_CONFIG)) == []
+
+
+# ------------------------------------------------------------- endpointing
+
+def test_the_caller_is_given_time_to_finish() -> None:
+    """livekit-agents ends a turn after 0.5 s of silence by default.
+
+    That is tuned for chat-like exchanges and is wrong here. A policyholder
+    reading a claim number off a letter - "claim ... C-L-M ... eight eight two
+    one" - pauses mid-identifier, and being cut off there produces a half
+    transcript that the agent then has to ask about again. Waiting is cheaper
+    than re-asking.
+    """
+    opts = endpointing_options(VoiceSettings())
+
+    assert opts["min_delay"] > LIBRARY_MIN_DELAY, (
+        "the whole point is to wait longer than the library default"
+    )
+    assert opts["min_delay"] >= 1.5, "shorter than this still clips a spelled-out id"
+    assert opts["max_delay"] > opts["min_delay"], "the cap must be above the floor"
+
+
+def test_the_wait_is_configurable() -> None:
+    """Tuned per deployment: a noisy line wants a longer floor, a quiet one a
+    shorter, and neither should need a code change."""
+    opts = endpointing_options(
+        VoiceSettings(endpointing_min_delay=2.5, endpointing_max_delay=9.0)
+    )
+    assert opts["min_delay"] == 2.5
+    assert opts["max_delay"] == 9.0
+
+
+def test_the_wait_is_not_so_long_the_call_feels_dead() -> None:
+    """A ceiling on the ceiling. Several seconds of silence after the caller
+    stops reads as a dropped line, which is the failure this is meant to avoid
+    at the other end."""
+    opts = endpointing_options(VoiceSettings())
+    assert opts["min_delay"] <= 3.0

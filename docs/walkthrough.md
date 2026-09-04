@@ -196,25 +196,11 @@ connection rather than as thinking.
 
 ## Voice: what a call looks like
 
-![The call surface, with the spoken answer written into the transcript](images/10-voice-orb.png)
+![The call, full screen](images/10-voice-call.png)
 
-Two things are happening in that screenshot.
-
-**The answer is in the thread.** Every word the assistant speaks is streamed to
-the transcript as it is said — with its markdown rendered and its citation
-attached — next to the caller's own words. Before this, only the caller's half
-was shown: the reply existed as audio and nothing else, so hanging up left
-nothing to re-read and a policyholder who misheard a deductible had no way to
-check it. Spoken and shown are not alternatives.
-
-**It is one conversation, not two.** The room name carries the conversation id,
-so the call continues whatever was already typed. The agent keys its memory on
-`conversation_id`; without this the caller would have to introduce themselves
-again, and a confirmation paused in chat could not be resumed by voice. The
-gateway returns the id it minted, so a call that starts cold is joined by the
-typed turns that follow.
-
-![The three orb states, in dark mode](images/11-voice-states-dark.png)
+A call takes the whole screen. There is nothing to read on one and exactly one
+thing to look at, and a 190px orb wedged under the transcript said "widget" for
+what is the entire foreground task.
 
 The orb is driven by an `AnalyserNode` on the real audio — the microphone track
 while the caller speaks, the agent's subscribed track while it answers — not by
@@ -223,9 +209,53 @@ or not media is flowing, and media failing silently, with the room connected and
 no sound, is exactly how WebRTC through Docker goes wrong. **If the orb moves,
 media is flowing.**
 
+![The three orb states, in dark mode](images/11-voice-states-dark.png)
+
 Working has no amplitude to show, so it gets a sweep rather than a pulse.
 Colours come from the same custom properties as the rest of the page, so the orb
 follows the theme instead of carrying a second palette.
+
+### Going back does not hang up
+
+![Back in the chat, call still running](images/11-voice-minimised.png)
+
+The call has three states, not two: closed, full screen, or **running while the
+caller reads the chat**. Collapsing the last two would mean hanging up to re-read
+an answer, which is precisely backwards — the call and the conversation are one
+thread. Minimising stops the drawing and keeps the audio graph; the pill above
+the composer is how you get back, because a minimised call you cannot return to
+is a lost call. `Escape` minimises rather than ends, for the same reason.
+
+While a call is live the mic button reopens it instead of hanging up. Ending is
+deliberate and lives on one clearly-labelled control: a button that starts a call
+on one press and drops it on the next is how you lose a call you meant to keep.
+
+**The answer is in the thread.** Every word the assistant speaks is streamed to
+the transcript as it is said — markdown rendered, citation attached — next to
+the caller's own words. Before this only the caller's half was shown: the reply
+existed as audio and nothing else, so hanging up left nothing to re-read and a
+policyholder who misheard a deductible had no way to check it.
+
+**It is one conversation, not two.** The room name carries the conversation id,
+so the call continues whatever was already typed. The agent keys its memory on
+`conversation_id`; without this the caller would have to introduce themselves
+again, and a confirmation paused in chat could not be resumed by voice.
+
+![The call on a phone](images/12-voice-call-mobile.png)
+
+### Letting the caller finish
+
+`livekit-agents` ends a turn after **0.5 s** of silence by default. That is tuned
+for quick exchanges and is wrong here: a policyholder reading an identifier off a
+letter — "claim … C-L-M … eight eight two one" — pauses mid-token, and being cut
+off there produces half a transcript the agent then has to ask about again.
+Waiting is cheaper than re-asking, so the floor is **1.8 s** with a 6 s ceiling,
+both configurable.
+
+Fixed rather than dynamic endpointing: dynamic adapts its delay from the history
+of the call, and the turns that most need patience are the rare ones — someone
+spelling out a policy number — so a moving average trained on short questions is
+at its least patient exactly when it should be most.
 
 ---
 
@@ -314,16 +344,16 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 259 in-process, no container, no network
-pytest tests/e2e -m e2e   # 35 against the running stack
+make test        # 262 in-process, no container, no network
+pytest tests/e2e -m e2e   # 48 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 181 |
+| `tests/unit` | 184 |
 | `tests/contract` | 47 |
-| `tests/e2e` | 35 |
+| `tests/e2e` | 48 |
 | `evals` | 31 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·

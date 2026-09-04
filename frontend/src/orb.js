@@ -157,13 +157,30 @@
       this.raf = requestAnimationFrame(frame);
     }
 
-    stop() {
+    /** Stop drawing, keep the audio graph.
+     *
+     * Going back to the chat does not end the call, so the analysers must
+     * survive it - tearing them down and rebuilding would need a second
+     * AudioContext and, on the agent side, a track that has already been
+     * subscribed and will not fire again. */
+    pause() {
       if (this.raf) cancelAnimationFrame(this.raf);
       this.raf = null;
+    }
+
+    stop() {
+      this.pause();
       this.detach();
       this.state = "idle";
       this.level = 0;
       this._draw();
+    }
+
+    /** Re-read the CSS size. The canvas is laid out by the stylesheet and sized
+     *  in `vmin`, so its box is 0 while the panel is hidden; measuring then and
+     *  never again renders the orb at the fallback size. */
+    resize() {
+      this._resize();
     }
 
     _draw() {
@@ -208,7 +225,7 @@
       // which is what gives the surface its depth at three drawn paths.
       for (let ring = 0; ring < 3; ring++) {
         const scale = 1 - ring * 0.11;
-        const alpha = 0.1 + ring * 0.09 + this.level * 0.18;
+        const alpha = 0.08 + ring * 0.06 + this.level * 0.1;
         ctx.beginPath();
         for (let i = 0; i <= 120; i++) {
           const theta = (i / 120) * TAU;
@@ -220,7 +237,7 @@
               base *
               h.amp *
               scale *
-              (0.25 + this.level * 0.9) *
+              (0.2 + this.level * 0.45) *
               Math.sin(h.k * theta + this.phase * h.speed + ring * 0.6);
           }
           const x = mid + Math.cos(theta) * radius;
@@ -234,14 +251,18 @@
       }
 
       // Core.
+      // Offset only slightly, and with a wide inner stop: a tight highlight
+      // high on the sphere reads as a second, smaller ball sitting inside the
+      // orb rather than as light falling on one surface.
       const core = ctx.createRadialGradient(
-        mid, mid - base * 0.12, base * 0.04, mid, mid, base * 0.82
+        mid, mid - base * 0.16, base * 0.16, mid, mid, base * 0.9
       );
-      core.addColorStop(0, `rgba(255,255,255,${0.72 + this.level * 0.25})`);
-      core.addColorStop(0.45, `rgba(${r},${g},${b},0.92)`);
-      core.addColorStop(1, `rgba(${r},${g},${b},0.35)`);
+      core.addColorStop(0, `rgba(255,255,255,${0.62 + this.level * 0.24})`);
+      core.addColorStop(0.32, `rgba(255,255,255,${0.2 + this.level * 0.14})`);
+      core.addColorStop(0.62, `rgba(${r},${g},${b},0.9)`);
+      core.addColorStop(1, `rgba(${r},${g},${b},0.42)`);
       ctx.beginPath();
-      ctx.arc(mid, mid, base * 0.82, 0, TAU);
+      ctx.arc(mid, mid, base * 0.9, 0, TAU);
       ctx.fillStyle = core;
       ctx.fill();
 

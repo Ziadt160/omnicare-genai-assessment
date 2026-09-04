@@ -104,6 +104,28 @@ def browser_message(event: RunEvent) -> dict[str, Any] | None:
     return None
 
 
+# What livekit-agents uses when told nothing. Named so the test asserting we
+# wait longer than it says why, and so a version bump that changes it is a
+# one-line correction here rather than a silently weaker guarantee.
+LIBRARY_MIN_DELAY = 0.5
+
+
+def endpointing_options(settings: VoiceSettings) -> dict[str, Any]:
+    """How long to wait after the caller stops before answering.
+
+    Fixed rather than dynamic: dynamic adapts its delay from the history of the
+    call, which is a good default for open conversation and a poor one here.
+    The turns that most need patience are the rare ones - someone spelling out
+    a policy number - and a moving average trained on short questions is at its
+    least patient exactly then.
+    """
+    return {
+        "mode": "fixed",
+        "min_delay": settings.endpointing_min_delay,
+        "max_delay": settings.endpointing_max_delay,
+    }
+
+
 def check_config(settings: VoiceSettings) -> list[str]:
     """Configuration problems that would otherwise surface per-call.
 
@@ -156,6 +178,7 @@ def build_session(settings: VoiceSettings, queue: Any, *, user_id: str,
     """Assemble the pipeline. Separated from `entrypoint` so it is inspectable
     without a LiveKit server."""
     from livekit.agents import AgentSession
+    from livekit.agents.voice.agent_session import TurnHandlingOptions
     from livekit.plugins import openai, silero
 
     from .agent_llm import OmniCareLLM
@@ -180,6 +203,9 @@ def build_session(settings: VoiceSettings, queue: Any, *, user_id: str,
         # Never openai.TTS: the plugin always sends `stream_format`, which Groq
         # rejects with a 400. Piper by default, Groq when explicitly asked for.
         tts=build_tts(settings),
+        # `turn_handling`, not `min_endpointing_delay`: the flat arguments are
+        # deprecated in 1.7 and forward to this anyway.
+        turn_handling=TurnHandlingOptions(endpointing=endpointing_options(settings)),
     )
     return session, shim
 

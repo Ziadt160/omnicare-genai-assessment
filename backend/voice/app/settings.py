@@ -48,3 +48,11 @@ class VoiceSettings(BaseSettings):
 
     run_timeout_s: float = 6.0
     low_confidence_threshold: float = 0.6
+
+    # How long the caller may pause before the turn is treated as finished.
+    # livekit-agents defaults to 0.5 s, which is tuned for quick exchanges and
+    # clips a policyholder reading an identifier off a letter - "claim ...
+    # C-L-M ... eight eight two one" pauses mid-token. Waiting is cheaper than
+    # re-asking; the ceiling keeps silence from reading as a dropped line.
+    endpointing_min_delay: float = 1.8
+    endpointing_max_delay: float = 6.0

@@ -46,9 +46,22 @@
 
 * { box-sizing: border-box; }
 
+/* `hidden` has to actually hide. The UA stylesheet's `[hidden] { display: none }`
+   is an author-overridable rule, so any class that sets `display` silently
+   outranks it - which left the full-screen call overlay covering the chat with
+   its `hidden` attribute dutifully set. Stated once here rather than as a
+   `[hidden]` variant on every component that might one day be toggled. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
-  min-height: 100vh;
+  /* `height`, not `min-height`. With min-height the body grows past the
+     viewport once the conversation is long enough, and the composer - an
+     `auto` row at the end of the grid - gets pushed below the fold. The thread
+     is what should scroll, not the page. `dvh` so a phone's collapsing address
+     bar does not leave the input under it; `vh` first as the fallback. */
+  height: 100vh;
+  height: 100dvh;
   display: grid;
   grid-template-rows: auto 1fr auto auto;
   background: var(--ground);
@@ -103,13 +116,25 @@ body {
 
 /* --------------------------------------------------------------- thread */
 
-main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
+/* `min-height: 0` on both: a grid item defaults to `min-height: auto`, which
+   refuses to shrink below its content. Without it the row keeps its full
+   content height, `overflow: hidden` never engages, and the page grows instead
+   of the thread scrolling - which is the actual mechanism behind the composer
+   disappearing. */
+main {
+  overflow: hidden;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+}
 
 .thread {
   list-style: none;
   margin: 0;
   padding: 22px 20px;
   overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -272,34 +297,79 @@ main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
 
 /* ------------------------------------------------------------------ voice */
 
-/* The call surface. Sits above the thread rather than replacing it: the point
-   of streaming the transcript into the conversation is that it can be read
-   while the call is happening, so covering it would defeat the feature. */
+/* A call takes the whole screen. On a call there is nothing to read and one
+   thing to look at, and a 190px orb wedged under the transcript said "this is a
+   widget" when the interaction it represents is the entire foreground task.
+   Going back to the chat leaves the call running - the two are one
+   conversation, and hanging up to re-read an answer would be absurd. */
 .voice {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background: var(--ground);
+  animation: voice-in .22s ease-out;
+}
+
+@keyframes voice-in {
+  from { opacity: 0; transform: scale(.985); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice { animation: none; }
+}
+
+.voice__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+}
+
+.voice__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 13.5px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+.voice__back:hover { background: var(--surface-2); }
+
+.voice__elapsed {
+  font: 500 12.5px/1 var(--mono);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.voice__stage {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 18px 16px 20px;
-  margin: 0 0 12px;
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 0 20px;
 }
 
 .voice__orb {
-  width: 190px;
-  height: 190px;
-  /* The canvas is transparent and draws its own glow, so it needs no
-     background - but it must not collapse before the first frame. */
+  width: min(320px, 62vmin);
+  height: min(320px, 62vmin);
   display: block;
 }
 
 .voice__phase {
   margin: 0;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 600;
-  letter-spacing: .02em;
+  letter-spacing: .01em;
   color: var(--ink);
 }
 
@@ -307,23 +377,74 @@ main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
    provisional and will be corrected. The settled text goes to the thread. */
 .voice__caption {
   margin: 0;
-  min-height: 18px;
+  min-height: 40px;
   max-width: 46ch;
   text-align: center;
-  font-size: 13px;
+  font-size: 14.5px;
   color: var(--ink-2);
 }
 
-.voice__end { margin-top: 4px; }
+.voice__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 0 20px 28px;
+}
 
 .voice__note {
   margin: 0;
-  font-size: 11.5px;
+  max-width: 42ch;
+  text-align: center;
+  font-size: 12px;
   color: var(--ink-3);
 }
 
+.btn--stop {
+  background: var(--stop);
+  border-color: var(--stop);
+  color: #fff;
+  padding: 11px 26px;
+  font-weight: 600;
+}
+.btn--stop:hover { filter: brightness(1.08); }
+
+/* The way back into a minimised call. Fixed rather than in the grid: it appears
+   and disappears mid-conversation, and re-flowing the thread each time would
+   move the text the caller is reading. */
+.voice-return {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 98px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 500 13px/1 system-ui, sans-serif;
+  box-shadow: 0 6px 20px rgb(0 0 0 / .16);
+  cursor: pointer;
+}
+.voice-return:hover { background: var(--surface-2); }
+
+.voice-return__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: voice-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .25; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  /* The orb still renders and still responds to amplitude; orb.js drops the
-     rotation and the resting breath. Nothing here needs to hide it. */
-  .voice__orb { opacity: .9; }
+  .voice-return__dot { animation: none; }
 }
