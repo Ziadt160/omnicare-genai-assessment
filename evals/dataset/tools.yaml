@@ -82,3 +82,45 @@
   expect:
     claim_written: false
     contains_any: ["cancel", "not filed", "haven't filed", "no claim"]
+
+# A coverage question must be searched, not deferred. The policy document is
+# one shared document; a policy number identifies the *policyholder* and is
+# needed to file a claim, never to look up what the policy says.
+#
+# Observed live on qwen2.5:7b: "a pipe purst in my kitchen, am I covered?"
+# returned "Could you please provide your policy number (POL-####) so I can
+# check the coverage details?" - no search, no citation, and a question the
+# policyholder cannot usefully answer. Rule 3 of the system prompt
+# ("if you do not have a value, ask for it") was being applied to a value the
+# answer does not depend on.
+
+- id: EV-35
+  bucket: tool_selection
+  message: "A pipe burst in my kitchen, am I covered?"
+  expect:
+    tools_called: ["search_policy_documents"]
+    must_not_call: ["get_claim_status", "submit_claim"]
+    # Asserts the outcome, not the phrasing: the answer is *given*, with the
+    # real limit in it. Forbidding the words "policy number" was the wrong
+    # test - offering to file a claim and asking for one then is correct
+    # behaviour, and the same case passed or failed run to run on wording
+    # alone. What must never happen is the answer being withheld pending a
+    # value the answer does not depend on.
+    contains_any: ["25,000", "25000"]
+
+- id: EV-36
+  bucket: tool_selection
+  # Deliberately misspelled: this is how it was typed when the bug surfaced,
+  # and a small model working harder on the wording is likelier to fall back
+  # on a clarifying question instead of searching.
+  message: "a pipe purst in my kitchen, am I covered?"
+  expect:
+    tools_called: ["search_policy_documents"]
+    contains_any: ["25,000", "25000"]
+
+- id: EV-37
+  bucket: tool_selection
+  message: "Is jewelry covered if it is stolen?"
+  expect:
+    tools_called: ["search_policy_documents"]
+    contains_any: ["10,000", "10000"]

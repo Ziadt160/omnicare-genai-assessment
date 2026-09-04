@@ -58,6 +58,12 @@ def build_policy_tool(searcher: PolicySearcher) -> StructuredTool:
     Always call this before answering. Never answer from memory, and never say
     a section does not exist without searching first.
 
+    You do NOT need a policy number to use this. There is one policy document
+    and it is the same for every policyholder, so a coverage question can
+    always be answered by searching it. Asking for a policy number before
+    searching wastes the turn and leaves the policyholder holding a question
+    they cannot usefully answer.
+
     Pay close attention to exclusions in the returned text. If a section says
     something is excluded, say so plainly and say which section says it. Do not
     soften an exclusion into "may be covered" or "it depends" - a policyholder

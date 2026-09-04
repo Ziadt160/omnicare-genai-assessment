@@ -393,7 +393,7 @@ make eval        # the behavioural gate
 | `tests/unit` | 214 |
 | `tests/contract` | 47 |
 | `tests/e2e` | 66 |
-| `evals` | 31 |
+| `evals` | 34 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·
 injection block rate 1.00 · unconfirmed writes 1.00 · tool selection 1.00
