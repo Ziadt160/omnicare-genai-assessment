@@ -1,0 +1,31 @@
+# Line endings.
+#
+# Git on Windows commonly runs with core.autocrlf=true, which rewrites LF to
+# CRLF on checkout. For a shell script that turns the shebang into
+# `#!/bin/sh\r`, and Linux then reports:
+#
+#     exec /docker-entrypoint-omnicare.sh: no such file or directory
+#
+# - naming a file that plainly exists, because the missing thing is the
+# interpreter. The frontend container died exactly this way on a fresh clone
+# while the working copy was fine, which is the only way to catch it.
+#
+# Anything that runs inside a container, or is read by one, is pinned to LF.
+
+* text=auto
+
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+Makefile        text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.json          text eol=lf
+*.sql           text eol=lf
+*.py            text eol=lf
+*.md            text eol=lf
+.env.example    text eol=lf
+
+# Binary - never touched.
+*.png           binary
+*.onnx          binary
