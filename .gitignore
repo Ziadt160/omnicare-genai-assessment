@@ -1,0 +1,28 @@
+# Secrets. .env.example is the committed template; .env never is.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Local data written at runtime
+data/mock_claims.json.lock
+data/mock_claims.json.tmp
+.spike_token
+.spike_url
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

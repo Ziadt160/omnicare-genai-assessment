@@ -1,0 +1,84 @@
+# Tool selection and argument extraction.
+#
+# Gates: tool-selection accuracy >= 0.90, tool-arg exact match >= 0.95. These
+# are model-dependent, so not 1.00 - but a drop below threshold means the tool
+# docstrings regressed, which is the actionable signal.
+
+- id: EV-11
+  bucket: tool_selection
+  message: "What is the status of claim CLM-8821?"
+  expect:
+    tools_called: ["get_claim_status"]
+    tool_args: {claim_id: "CLM-8821"}
+    must_not_call: ["submit_claim"]
+    contains_any: ["Approved"]
+
+- id: EV-12
+  bucket: tool_selection
+  message: "Has CLM-9014 been decided yet?"
+  expect:
+    tools_called: ["get_claim_status"]
+    tool_args: {claim_id: "CLM-9014"}
+    contains_any: ["Under Review"]
+
+- id: EV-13
+  bucket: tool_recovery
+  message: "Check claim CLM-0000 for me."
+  expect:
+    tools_called: ["get_claim_status"]
+    contains_any: ["not found", "could not find", "couldn't find", "cannot find",
+                   "can't find", "no claim", "unable to find"]
+    must_not_contain: ["Approved", "Under Review", "Denied"]
+
+- id: EV-14
+  bucket: tool_args
+  message: "File a water damage claim on POL-1092 for $1,200 - washing machine overflowed."
+  expect:
+    tools_called: ["submit_claim"]
+    tool_args:
+      policy_number: "POL-1092"
+      claim_type: "Water Damage"
+      amount: "1200.00"
+    requires_confirmation: true
+
+- id: EV-15
+  bucket: tool_args
+  # Carries all four arguments. The earlier wording omitted a description, so
+  # a correct model asked for one - which is what the submit_claim docstring
+  # tells it to do, and made this case assert the opposite of its intent.
+  # EV-16 is the case that tests asking for missing arguments.
+  # No "car": the previous wording said the laptop was stolen "from my car",
+  # and the model classified it Auto rather than Personal Property. That is a
+  # defensible reading, so the ambiguity was the test's fault - this case
+  # exists to check argument extraction, not to probe classification edges.
+  message: "I need to file a claim on policy POL-3341 for $900 - my laptop was
+    stolen while I was travelling."
+  expect:
+    tools_called: ["submit_claim"]
+    tool_args:
+      policy_number: "POL-3341"
+      claim_type: "Personal Property"
+      amount: "900.00"
+    requires_confirmation: true
+
+- id: EV-16
+  bucket: tool_args
+  message: "I want to file a claim."
+  expect:
+    tools_called: []
+    contains_any: ["policy number", "which policy", "what happened", "how much"]
+
+- id: EV-17
+  bucket: tool_selection
+  message: "Is a burst pipe covered, and what is the status of CLM-8821?"
+  expect:
+    tools_called: ["search_policy_documents", "get_claim_status"]
+    cites: ["sample_policy.md § Section 1: Home Water Damage Coverage"]
+
+- id: EV-18
+  bucket: confirmation
+  message: "File a water damage claim on POL-1092 for $1,200 - pipe burst."
+  followup: "no, cancel that"
+  expect:
+    claim_written: false
+    contains_any: ["cancel", "not filed", "haven't filed", "no claim"]

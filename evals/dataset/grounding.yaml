@@ -1,0 +1,79 @@
+# RAG groundedness and citation fidelity.
+#
+# EV-04 and EV-05 are the sharpest rows in the suite: sample_policy.md says
+# gradual leaks and flood damage are STRICTLY EXCLUDED, and the default failure
+# of a small model asked "is water damage covered?" is a confident yes.
+# Gate: exclusion recall must be 1.00.
+
+- id: EV-01
+  bucket: grounding
+  message: "A pipe burst in my kitchen. Am I covered?"
+  expect:
+    cites: ["sample_policy.md § Section 1: Home Water Damage Coverage"]
+    contains_all: ["$25,000", "$500"]
+    tools_called: ["search_policy_documents"]
+
+- id: EV-02
+  bucket: grounding
+  message: "What is my deductible for water damage?"
+  expect:
+    cites: ["sample_policy.md § Section 1: Home Water Damage Coverage"]
+    contains_all: ["$500"]
+
+- id: EV-03
+  bucket: grounding
+  message: "How much are electronics and furniture covered for?"
+  expect:
+    cites: ["sample_policy.md § Section 2: Personal Property Protection"]
+    contains_all: ["$10,000"]
+
+- id: EV-04
+  bucket: grounding_negative
+  message: "My basement flooded in the storm. Is that covered?"
+  expect:
+    cites: ["sample_policy.md § Section 1: Home Water Damage Coverage"]
+    contains_any: ["not covered", "excluded", "does not cover"]
+    # Targeted at the flood claim specifically. A correct answer quotes the
+    # burst-pipe coverage *and then* excludes the flood, so a bare "is covered"
+    # substring was failing right answers.
+    must_not_contain: ["flood damage is covered", "flooding is covered",
+                       "your basement is covered", "this is covered"]
+
+- id: EV-05
+  bucket: grounding_negative
+  message: "There has been a slow leak under my sink for months. Will you pay?"
+  expect:
+    cites: ["sample_policy.md § Section 1: Home Water Damage Coverage"]
+    contains_any: ["gradual", "excluded", "not covered"]
+    must_not_contain: ["gradual leaks are covered", "the leak is covered"]
+
+- id: EV-06
+  bucket: grounding
+  message: "I have a $4,000 ring. Do I need anything special?"
+  expect:
+    cites: ["sample_policy.md § Section 2: Personal Property Protection"]
+    contains_all: ["appraisal"]
+
+- id: EV-07
+  bucket: grounding
+  message: "Is a $1,800 laptop covered without an appraisal?"
+  expect:
+    cites: ["sample_policy.md § Section 2: Personal Property Protection"]
+    contains_any: ["$2,500", "no appraisal", "not require"]
+
+- id: EV-08
+  bucket: citation_fidelity
+  message: "What does Section 3 say about earthquake cover?"
+  expect:
+    # There is no Section 3. What must hold is that the answer does not invent
+    # one and does not assert coverage - the ground node guarantees the first,
+    # and no retrieved section can support the second.
+    #
+    # This case used to assert the *phrasing* of the denial and the wording
+    # list was widened twice before it became clear that was the wrong test: a
+    # model says "no Section 3 was found", "does not specifically address" or
+    # "only covers Sections 1 and 2" on different runs, all correct. Chasing
+    # that is fitting the eval to the model.
+    must_not_cite_unknown: true
+    must_not_contain: ["section 3 states", "section 3 says", "section 3 covers",
+                       "earthquake damage is covered", "earthquakes are covered"]

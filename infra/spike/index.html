@@ -1,0 +1,162 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LiveKit WebRTC spike</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.3rem; }
+  button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; }
+  #log { background: #0002; padding: .75rem; border-radius: 4px; font: 12px/1.55 ui-monospace, monospace;
+         white-space: pre-wrap; max-height: 22rem; overflow-y: auto; }
+  .ok   { color: #17803d; font-weight: 600; }
+  .bad  { color: #b3261e; font-weight: 600; }
+  .warn { color: #8a5a14; font-weight: 600; }
+</style>
+
+<h1>LiveKit WebRTC spike</h1>
+
+<p>
+  The day-1 gate. This publishes a mic track to a self-hosted LiveKit server and
+  subscribes to it back. If the ICE state reaches <code>connected</code> and audio
+  levels move when you speak, WebRTC works through Docker on this machine and the
+  rest of the voice feature is ordinary engineering.
+</p>
+<p>
+  If it hangs at <code>checking</code>, LiveKit is advertising an IP the browser
+  cannot reach. Check <code>rtc.node_ip</code> and <code>rtc.use_external_ip</code>
+  in <code>infra/livekit.yaml</code>. The TCP fallback on 7881 is the safety net.
+</p>
+
+<p>
+  <button id="go">Connect and publish mic</button>
+  <button id="tone">Connect with a synthetic tone</button>
+  <button id="stop" disabled>Disconnect</button>
+</p>
+<p style="font-size:.9em;opacity:.8">
+  The tone button needs no microphone permission, so it runs headlessly and in
+  CI. It exercises the same publisher peer connection and the same ICE
+  negotiation - which is the part that actually fails through Docker.
+</p>
+
+<div id="log">idle</div>
+
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.2/dist/livekit-client.umd.js"></script>
+<script>
+  const LK_URL = "ws://localhost:7880";
+  // Dev token minted by infra/spike/mint_token.py with the devkey/secret pair from
+  // infra/livekit.yaml. In the real app the gateway mints these - the secret
+  // never reaches the browser.
+  const TOKEN = new URLSearchParams(location.search).get("token") || "";
+
+  const logEl = document.getElementById("log");
+  const lines = [];
+  function log(msg, cls) {
+    const t = new Date().toISOString().slice(11, 23);
+    lines.push(cls ? `${t}  <span class="${cls}">${msg}</span>` : `${t}  ${msg}`);
+    logEl.innerHTML = lines.join("\n");
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  let room = null;
+
+  /* A 440 Hz tone as a real MediaStreamTrack. getUserMedia needs a permission
+     prompt and a device; an oscillator needs neither, and ICE cannot tell the
+     difference - the negotiation being tested is identical. */
+  function syntheticTrack() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const dst = ctx.createMediaStreamDestination();
+    osc.frequency.value = 440;
+    osc.connect(dst);
+    osc.start();
+    return dst.stream.getAudioTracks()[0];
+  }
+
+  async function run(useMicrophone) {
+    if (!TOKEN) {
+      log("No token. Run: python infra/spike/mint_token.py  then open this page with ?token=...", "bad");
+      return;
+    }
+    lines.length = 0;
+    document.getElementById("go").disabled = true;
+    document.getElementById("tone").disabled = true;
+    document.getElementById("stop").disabled = false;
+
+    room = new LivekitClient.Room({ adaptiveStream: false, dynacast: false });
+
+    room.on(LivekitClient.RoomEvent.SignalConnected, () => log("signal connected (ws 7880 ok)", "ok"));
+    room.on(LivekitClient.RoomEvent.ConnectionStateChanged, (s) => log("connection state: " + s));
+    room.on(LivekitClient.RoomEvent.Disconnected, (r) => log("disconnected: " + r, "warn"));
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+      log("subscribed to own track back through the SFU", "ok");
+      const el = track.attach();
+      el.muted = true;               // avoid a feedback loop
+      document.body.appendChild(el);
+    });
+
+    try {
+      log("connecting to " + LK_URL + " ...");
+      await room.connect(LK_URL, TOKEN);
+      log("room joined: " + room.name);
+
+      if (useMicrophone) {
+        await room.localParticipant.setMicrophoneEnabled(true);
+        log("microphone published", "ok");
+      } else {
+        await room.localParticipant.publishTrack(syntheticTrack());
+        log("synthetic 440 Hz tone published (no permission needed)", "ok");
+      }
+
+      // Poll the underlying peer connection for the answer that actually matters:
+      // did ICE get past `checking`?
+      let ticks = 0;
+      const timer = setInterval(async () => {
+        ticks++;
+        const pc = room.engine?.pcManager?.publisher?._pc;
+        const ice = pc ? pc.iceConnectionState : "unknown";
+        const level = room.localParticipant.audioLevel;
+
+        if (ticks % 2 === 0) log(`ice=${ice}  audioLevel=${level.toFixed(3)}`);
+
+        if (ice === "connected" || ice === "completed") {
+          const stats = await pc.getStats();
+          let pair = null;
+          stats.forEach((r) => {
+            if (r.type === "candidate-pair" && r.state === "succeeded") pair = r;
+          });
+          let proto = "unknown";
+          if (pair) {
+            stats.forEach((r) => {
+              if (r.id === pair.localCandidateId) proto = r.protocol + " / " + r.candidateType;
+            });
+          }
+          log("ICE CONNECTED over " + proto, "ok");
+          log("GATE PASSED - WebRTC media works through Docker on this machine.", "ok");
+          clearInterval(timer);
+        } else if (ticks > 20) {
+          log("ICE stuck at '" + ice + "' after 20s", "bad");
+          log("GATE FAILED - LiveKit is advertising an unreachable IP.", "bad");
+          log("Fix rtc.node_ip / rtc.use_external_ip in infra/livekit.yaml,", "bad");
+          log("or fall back to TCP on 7881. Do not start the voice worker yet.", "bad");
+          clearInterval(timer);
+        }
+      }, 1000);
+    } catch (err) {
+      log("connect failed: " + err, "bad");
+      if (String(err).includes("NotAllowedError")) {
+        log("Microphone blocked. Use the tone button - it tests the same ICE path.", "warn");
+      }
+      document.getElementById("go").disabled = false;
+      document.getElementById("tone").disabled = false;
+    }
+  }
+
+  document.getElementById("go").onclick = () => run(true);
+  document.getElementById("tone").onclick = () => run(false);
+
+  document.getElementById("stop").onclick = async () => {
+    if (room) await room.disconnect();
+    document.getElementById("go").disabled = false;
+    document.getElementById("stop").disabled = true;
+  };
+</script>

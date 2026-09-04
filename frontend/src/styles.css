@@ -1,0 +1,271 @@
+/* OmniCare Assistant.
+ *
+ * Deliberately restrained: the brief values working features over UI design,
+ * and a chat surface that reads clearly is worth more here than one that is
+ * decorated. The one place styling does real work is citations - a coverage
+ * answer is only trustworthy if you can see which policy section it came from.
+ */
+
+:root {
+  --ground: #f1f4f5;
+  --surface: #ffffff;
+  --surface-2: #e9edef;
+  --ink: #131a20;
+  --ink-2: #55646f;
+  --ink-3: #7e8d98;
+  --rule: #d7dee2;
+  --accent: #8a5a14;
+  --accent-soft: #f3e7d2;
+  --ok: #14653c;
+  --ok-soft: #deefe5;
+  --warn: #8a5a14;
+  --stop: #a01b2b;
+  --stop-soft: #f6e1e3;
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0e1418;
+    --surface: #161e24;
+    --surface-2: #1e282f;
+    --ink: #e4edf2;
+    --ink-2: #93a5b1;
+    --ink-3: #6e808c;
+    --rule: #26313a;
+    --accent: #d9a441;
+    --accent-soft: #2e2513;
+    --ok: #5fd69b;
+    --ok-soft: #12291f;
+    --warn: #d9a441;
+    --stop: #f08a93;
+    --stop-soft: #2b161a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  background: var(--ground);
+  color: var(--ink);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ------------------------------------------------------------- masthead */
+
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+
+.mark {
+  display: grid;
+  place-items: center;
+  width: 38px; height: 38px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--surface);
+  font: 600 13px/1 var(--mono);
+  letter-spacing: .04em;
+}
+
+.masthead h1 { margin: 0; font-size: 16px; font-weight: 600; }
+.masthead p { margin: 1px 0 0; font-size: 12px; color: var(--ink-3); }
+
+.status { display: flex; gap: 8px; }
+
+.pill {
+  font: 500 10.5px/1 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.pill--ok   { background: var(--ok-soft); color: var(--ok); }
+.pill--warn { background: var(--accent-soft); color: var(--warn); }
+.pill--bad  { background: var(--stop-soft); color: var(--stop); }
+.pill--busy { background: var(--accent-soft); color: var(--warn); }
+
+/* --------------------------------------------------------------- thread */
+
+main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
+
+.thread {
+  list-style: none;
+  margin: 0;
+  padding: 22px 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.msg { display: flex; }
+.msg--user { justify-content: flex-end; }
+.msg--system { justify-content: center; }
+
+.bubble {
+  max-width: min(62ch, 88%);
+  padding: 11px 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+}
+.bubble p { margin: 0; }
+.bubble p + p { margin-top: 8px; }
+.bubble--pending { opacity: .6; font-style: italic; }
+
+.msg--user .bubble {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.msg--system .bubble {
+  background: var(--stop-soft);
+  border-color: transparent;
+  color: var(--stop);
+  font-size: 13px;
+  text-align: center;
+}
+
+.hint { font-size: 13px; color: var(--ink-3); }
+.hint em { font-style: normal; color: var(--ink-2); }
+
+/* ------------------------------------------------------------ citations */
+
+.sources {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sources__label {
+  font: 500 9.5px/1 var(--mono);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.cite {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 9px;
+  border-left: 2px solid var(--accent);
+}
+.cite__section { font-size: 12.5px; font-weight: 500; }
+.cite__file { font: 11px/1.4 var(--mono); color: var(--ink-3); }
+
+/* ---------------------------------------------------------------- tools */
+
+.tools { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 5px; }
+
+.chip {
+  font: 500 10.5px/1 var(--mono);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  cursor: help;
+}
+.chip--error { background: var(--stop-soft); color: var(--stop); }
+.chip--awaiting_confirmation { background: var(--accent-soft); color: var(--warn); }
+
+/* --------------------------------------------------------- confirmation */
+
+.confirm {
+  margin: 0 20px 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.confirm__text { margin: 0 0 11px; font-size: 14px; }
+.confirm__actions { display: flex; gap: 8px; }
+
+/* ------------------------------------------------------------- composer */
+
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border-top: 1px solid var(--rule);
+}
+
+.composer__input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 13px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--ground);
+  color: var(--ink);
+  font: inherit;
+}
+.composer__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.btn {
+  padding: 10px 16px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { border-color: var(--ink-3); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn--icon { display: grid; place-items: center; width: 42px; padding: 0; }
+.btn--live { background: var(--stop); border-color: var(--stop); color: #fff; }
+
+/* ----------------------------------------------------------------- foot */
+
+.foot {
+  margin: 0;
+  padding: 0 20px 14px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+
+@media (max-width: 560px) {
+  .masthead { flex-wrap: wrap; }
+  .bubble { max-width: 92%; }
+}

@@ -1,0 +1,9 @@
+-r backend/requirements.txt
+
+pytest==8.3.*
+pytest-asyncio==0.24.*
+pytest-cov==6.*
+respx==0.21.*
+testcontainers[postgres,redis]==4.8.*
+ruff==0.7.*
+mypy==1.13.*

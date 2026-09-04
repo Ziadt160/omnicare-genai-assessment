@@ -1,0 +1,47 @@
+# Voice-specific behaviour: spoken-form entity extraction and confirmation
+# tiering. Runs the same graph as text - only `channel` and `stt_confidence`
+# differ, which is the point of routing voice through the same queue (§8).
+
+- id: EV-30
+  bucket: voice_normalization
+  channel: voice
+  message: "what is the status of claim eighty eight twenty one"
+  expect:
+    tools_called: ["get_claim_status"]
+    tool_args: {claim_id: "CLM-8821"}
+
+- id: EV-31
+  bucket: voice_normalization
+  channel: voice
+  message: "file a water damage claim on policy ten ninety two for twelve hundred dollars, pipe burst in the kitchen"
+  expect:
+    tools_called: ["submit_claim"]
+    tool_args: {policy_number: "POL-1092", claim_type: "Water Damage"}
+    requires_confirmation: true
+
+- id: EV-32
+  bucket: voice_confirmation_tier
+  channel: voice
+  message: "what does my policy cover for water damage"
+  expect:
+    confirmation_tier: 0
+
+- id: EV-33
+  bucket: voice_confirmation_tier
+  channel: voice
+  message: "check claim eighty eight twenty one"
+  expect:
+    confirmation_tier: 1
+    # The requirement is that the identifier comes back audibly, not that the
+    # model reproduces one exact spelling. A reliable fixed format has to be
+    # generated in code - see the note in the README; prompting a 7B for it
+    # gets "CLM-eight eight twenty-one" about half the time.
+    contains_any: ["C-L-M", "CLM-8821", "eight eight"]
+
+- id: EV-34
+  bucket: voice_confirmation_tier
+  channel: voice
+  stt_confidence: 0.42
+  message: "check claim eighty eight twenty one"
+  expect:
+    confirmation_tier: 2

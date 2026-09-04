@@ -1,0 +1,70 @@
+"""Spoken-form normalization: the case table.
+
+Written before the implementation. Every row here is a transcript shape STT
+actually produces for the two ids in the fixture data.
+"""
+
+import pytest
+
+from libs.guardrails.normalize import (
+    normalize_claim_id,
+    normalize_policy_number,
+    phonetic_readback,
+)
+
+
+@pytest.mark.parametrize(
+    ("spoken", "expected"),
+    [
+        # already canonical
+        ("POL-1092", "POL-1092"),
+        ("my policy is POL-1092", "POL-1092"),
+        ("pol 1092", "POL-1092"),
+        # letters spelled out
+        ("P O L 1092", "POL-1092"),
+        ("P.O.L. 1092", "POL-1092"),
+        # numbers spoken in pairs - the common case
+        ("policy ten ninety two", "POL-1092"),
+        ("pol ten ninety-two", "POL-1092"),
+        # digit by digit
+        ("policy number one zero nine two", "POL-1092"),
+        ("policy one oh nine two", "POL-1092"),
+        # no identifier present
+        ("what is covered for water damage", None),
+        ("I need to file a claim", None),
+    ],
+)
+def test_normalize_policy_number(spoken: str, expected: str | None) -> None:
+    assert normalize_policy_number(spoken) == expected
+
+
+@pytest.mark.parametrize(
+    ("spoken", "expected"),
+    [
+        ("CLM-8821", "CLM-8821"),
+        ("clm 8821", "CLM-8821"),
+        ("claim eighty eight twenty one", "CLM-8821"),
+        ("claim eighty-eight twenty-one", "CLM-8821"),
+        ("claim number C L M 8 8 2 1", "CLM-8821"),
+        ("clm 9014", "CLM-9014"),
+        ("claim ninety fourteen", "CLM-9014"),
+        ("claim nine oh one four", "CLM-9014"),
+        # five digits is not a claim id - must not silently truncate
+        ("claim ninety zero fourteen", None),
+        ("what is my coverage", None),
+    ],
+)
+def test_normalize_claim_id(spoken: str, expected: str | None) -> None:
+    assert normalize_claim_id(spoken) == expected
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected"),
+    [
+        ("CLM-8821", "C-L-M, eight eight two one"),
+        ("POL-1092", "P-O-L, one zero nine two"),
+    ],
+)
+def test_phonetic_readback(identifier: str, expected: str) -> None:
+    """A user can only verify by ear what is spoken verifiably."""
+    assert phonetic_readback(identifier) == expected
