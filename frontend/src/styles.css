@@ -269,3 +269,61 @@ main { overflow: hidden; display: grid; grid-template-rows: 1fr auto; }
   .masthead { flex-wrap: wrap; }
   .bubble { max-width: 92%; }
 }
+
+/* ------------------------------------------------------------------ voice */
+
+/* The call surface. Sits above the thread rather than replacing it: the point
+   of streaming the transcript into the conversation is that it can be read
+   while the call is happening, so covering it would defeat the feature. */
+.voice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 18px 16px 20px;
+  margin: 0 0 12px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+
+.voice__orb {
+  width: 190px;
+  height: 190px;
+  /* The canvas is transparent and draws its own glow, so it needs no
+     background - but it must not collapse before the first frame. */
+  display: block;
+}
+
+.voice__phase {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--ink);
+}
+
+/* The live caption is the partial transcript: deliberately quiet, because it is
+   provisional and will be corrected. The settled text goes to the thread. */
+.voice__caption {
+  margin: 0;
+  min-height: 18px;
+  max-width: 46ch;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.voice__end { margin-top: 4px; }
+
+.voice__note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The orb still renders and still responds to amplitude; orb.js drops the
+     rotation and the resting breath. Nothing here needs to hide it. */
+  .voice__orb { opacity: .9; }
+}

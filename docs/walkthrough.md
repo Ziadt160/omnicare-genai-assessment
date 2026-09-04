@@ -194,6 +194,41 @@ ambiguity a read-back exists to remove. And a spoken filler goes out the moment
 a tool starts, because several seconds of silence on a call reads as a dropped
 connection rather than as thinking.
 
+## Voice: what a call looks like
+
+![The call surface, with the spoken answer written into the transcript](images/10-voice-orb.png)
+
+Two things are happening in that screenshot.
+
+**The answer is in the thread.** Every word the assistant speaks is streamed to
+the transcript as it is said — with its markdown rendered and its citation
+attached — next to the caller's own words. Before this, only the caller's half
+was shown: the reply existed as audio and nothing else, so hanging up left
+nothing to re-read and a policyholder who misheard a deductible had no way to
+check it. Spoken and shown are not alternatives.
+
+**It is one conversation, not two.** The room name carries the conversation id,
+so the call continues whatever was already typed. The agent keys its memory on
+`conversation_id`; without this the caller would have to introduce themselves
+again, and a confirmation paused in chat could not be resumed by voice. The
+gateway returns the id it minted, so a call that starts cold is joined by the
+typed turns that follow.
+
+![The three orb states, in dark mode](images/11-voice-states-dark.png)
+
+The orb is driven by an `AnalyserNode` on the real audio — the microphone track
+while the caller speaks, the agent's subscribed track while it answers — not by
+a timer. That is the point of it: a decorative animation looks identical whether
+or not media is flowing, and media failing silently, with the room connected and
+no sound, is exactly how WebRTC through Docker goes wrong. **If the orb moves,
+media is flowing.**
+
+Working has no amplitude to show, so it gets a sweep rather than a pulse.
+Colours come from the same custom properties as the rest of the page, so the orb
+follows the theme instead of carrying a second palette.
+
+---
+
 ## Voice: the WebRTC gate
 
 Voice is the riskiest part of the build, because WebRTC through Docker Desktop
@@ -279,16 +314,16 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 245 in-process, no container, no network
-pytest tests/e2e -m e2e   # 26 against the running stack
+make test        # 259 in-process, no container, no network
+pytest tests/e2e -m e2e   # 35 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 177 |
-| `tests/contract` | 37 |
-| `tests/e2e` | 26 |
+| `tests/unit` | 181 |
+| `tests/contract` | 47 |
+| `tests/e2e` | 35 |
 | `evals` | 31 |
 
 All six eval gates green: citation precision 1.00 · exclusion recall 1.00 ·

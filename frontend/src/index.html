@@ -34,6 +34,18 @@
       </li>
     </ol>
 
+    <!-- The call surface. A conversation over audio has nothing on screen to
+         say whether the assistant is listening, working or talking; the orb is
+         driven by the actual audio, so if it moves, media is flowing. -->
+    <div id="voice-panel" class="voice" hidden>
+      <canvas id="voice-orb" class="voice__orb" width="240" height="240"
+              role="img" aria-label="Voice activity"></canvas>
+      <p id="voice-phase" class="voice__phase" aria-live="polite">Listening</p>
+      <p id="voice-caption" class="voice__caption"></p>
+      <button id="voice-hangup" class="btn voice__end" type="button">End call</button>
+      <p class="voice__note">Everything said on the call is written into the conversation above.</p>
+    </div>
+
     <!-- Shown when the graph pauses before an irreversible write. -->
     <div id="confirm" class="confirm" hidden>
       <p id="confirm-text" class="confirm__text"></p>
@@ -66,6 +78,7 @@
   <script src="config.js" onerror="window.OMNICARE_API='http://localhost:8080'"></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.2/dist/livekit-client.umd.js"></script>
   <script src="app.js"></script>
+  <script src="orb.js"></script>
   <script src="voice.js"></script>
 </body>
 </html>

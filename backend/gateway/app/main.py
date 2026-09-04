@@ -31,6 +31,7 @@ from libs.contracts import (
     ToolCall,
     VoiceTokenRequest,
     VoiceTokenResponse,
+    room_for,
 )
 from libs.errors import QueueSaturated, RateLimited
 from libs.observability import otel
@@ -284,7 +285,15 @@ async def voice_token(
     Server-side only: the API secret never reaches the browser.
     """
     settings = deps.settings
-    room = f"omnicare-{request.conversation_id or request.user_id}"
+
+    # `ensure`, not the raw user id: a call and a typed conversation must be the
+    # same conversation. The agent keys its memory on this, so a caller who was
+    # just typing would otherwise have to introduce themselves again, and a
+    # confirmation paused in chat could not be resumed by voice.
+    conversation_id = await deps.conversations.ensure(
+        request.user_id, request.conversation_id
+    )
+    room = room_for(conversation_id)
     token = mint_access_token(
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,
@@ -296,6 +305,7 @@ async def voice_token(
         token=token,
         url=settings.livekit_url,
         room=room,
+        conversation_id=conversation_id,
         expires_in=settings.livekit_token_ttl_s,
     )
 

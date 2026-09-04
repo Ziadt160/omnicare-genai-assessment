@@ -110,7 +110,7 @@ async def test_citations_are_shown_not_spoken() -> None:
     assert "sample_policy.md" not in spoken
     assert browser_message(
         RunEvent(run_id="r", type="sources", seq=0, payload={"sources": [CITATION]})
-    ) == {"type": "answer", "text": "", "sources": [CITATION]}
+    ) == {"type": "sources", "sources": [CITATION]}
 
 
 async def test_a_confirmation_is_spoken() -> None:
@@ -182,13 +182,54 @@ def test_a_transcript_with_no_identifier_is_untouched() -> None:
         ("queued", {"position": 3}, True),
         ("queued", {"position": 0}, False),   # no queue, nothing to say
         ("tool_start", {"name": "get_claim_status"}, True),
-        ("token", {"text": "hello"}, False),  # spoken, not shown
+        ("token", {"text": "hello"}, True),   # spoken AND shown - see below
+        ("token", {"text": ""}, False),       # nothing to show
         ("done", {}, True),
     ],
 )
 def test_browser_mirror_selects_the_right_events(event_type, payload, shown) -> None:
     event = RunEvent(run_id="r", type=event_type, seq=0, payload=payload)
     assert (browser_message(event) is not None) is shown
+
+
+def test_the_assistants_own_words_are_mirrored_to_the_screen() -> None:
+    """A call used to leave no readable record of what the assistant said.
+
+    The caller's transcript was shown, the tool chips were shown and the
+    citations were shown - but the answer itself existed only as audio. Hang up
+    and there was nothing to re-read, and a policyholder who mishears a
+    deductible has no way to check it. Spoken and shown are not alternatives.
+    """
+    message = browser_message(
+        RunEvent(run_id="r", type="token", seq=0, payload={"text": "covered up to $25,000"})
+    )
+    assert message == {"type": "answer_delta", "text": "covered up to $25,000"}
+
+
+def test_the_readback_is_shown_as_the_assistants_words_too() -> None:
+    """A turn that ends in a confirmation produces no tokens, so without this
+    the panel would show the read-back and the transcript would show nothing."""
+    message = browser_message(
+        RunEvent(run_id="r", type="confirm", seq=0,
+                 payload={"readback": "Shall I file it?", "args": {}})
+    )
+    assert message is not None
+    assert message["type"] == "confirm"
+    assert message["readback"] == "Shall I file it?"
+
+
+def test_citations_arrive_without_wiping_the_answer() -> None:
+    """`sources` used to be published as an `answer` carrying an empty string.
+
+    The browser rendered that as a *new* assistant bubble with no text, so the
+    citations detached from the answer they belonged to and the spoken reply
+    was still nowhere on screen.
+    """
+    message = browser_message(
+        RunEvent(run_id="r", type="sources", seq=0, payload={"sources": [CITATION]})
+    )
+    assert message == {"type": "sources", "sources": [CITATION]}
+    assert "text" not in message, "sources must not overwrite the answer"
 
 
 # ------------------------------------------------------------------ helpers
