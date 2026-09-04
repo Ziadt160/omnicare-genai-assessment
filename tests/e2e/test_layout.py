@@ -31,21 +31,28 @@ pytestmark = [
 ]
 
 
-@pytest.fixture()
-def page():
+@pytest.fixture(scope="module")
+def browser():
+    """One browser for the module - see the note in test_voice_ui.py."""
     pytest.importorskip("playwright.sync_api")
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
         try:
-            browser = pw.chromium.launch(channel="chrome", headless=True)
+            b = pw.chromium.launch(channel="chrome", headless=True)
         except Exception as exc:
             pytest.skip(f"no system Chrome to drive: {exc}")
-        p = browser.new_page(viewport={"width": 1000, "height": 700})
-        p.goto(FRONTEND, wait_until="networkidle")
-        p.wait_for_function("() => window.OmniCare !== undefined", timeout=10_000)
-        yield p
-        browser.close()
+        yield b
+        b.close()
+
+
+@pytest.fixture()
+def page(browser):
+    p = browser.new_page(viewport={"width": 1000, "height": 700})
+    p.goto(FRONTEND, wait_until="networkidle")
+    p.wait_for_function("() => window.OmniCare !== undefined", timeout=10_000)
+    yield p
+    p.close()
 
 
 def fill_thread(page, count: int = 40) -> None:

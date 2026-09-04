@@ -52,6 +52,13 @@
       : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   }
 
+  /** Mix a colour toward white. Used for the lit part of the body so the core
+   *  stays the orb's own hue instead of washing out to grey. */
+  function lighten(r, g, b, amount) {
+    const mix = (c) => Math.round(c + (255 - c) * amount);
+    return `${mix(r)},${mix(g)},${mix(b)}`;
+  }
+
   class Orb {
     constructor(canvas) {
       this.canvas = canvas;
@@ -210,60 +217,76 @@
       const breath = this.reduced ? 0 : Math.sin(this.phase * 1.6) * 0.015;
       const base = size * (0.3 + breath) + this.level * size * 0.075;
 
-      // Outer glow. The outer stop is the inscribed circle, not a multiple of
-      // the orb: anything larger is still partly opaque where it meets the
-      // canvas edge, and the fill leaves a visible square halo around the orb.
-      const glow = ctx.createRadialGradient(
-        mid, mid, base * 0.4, mid, mid, Math.min(base * 1.9, mid)
-      );
-      glow.addColorStop(0, `rgba(${r},${g},${b},${0.22 + this.level * 0.3})`);
-      glow.addColorStop(1, `rgba(${r},${g},${b},0)`);
-      ctx.fillStyle = glow;
-      ctx.fillRect(0, 0, size, size);
-
-      // Deformed rings. Each is the same blob at a different scale and phase,
-      // which is what gives the surface its depth at three drawn paths.
-      for (let ring = 0; ring < 3; ring++) {
-        const scale = 1 - ring * 0.11;
-        const alpha = 0.08 + ring * 0.06 + this.level * 0.1;
+      // A helper for the deformed outline, so the body and the halo are the
+      // same shape rather than a blob inside a circle.
+      const blob = (radius, phaseShift, strength) => {
         ctx.beginPath();
-        for (let i = 0; i <= 120; i++) {
-          const theta = (i / 120) * TAU;
-          let radius = base * scale;
+        for (let i = 0; i <= 140; i++) {
+          const theta = (i / 140) * TAU;
+          let rad = radius;
           for (const h of HARMONICS) {
-            // Near-circular when quiet: the deformation is what a voice does
-            // to the shape, so at rest there should be almost none of it.
-            radius +=
-              base *
+            // Near-circular when quiet: the deformation is what a voice does to
+            // the shape, so at rest there should be almost none of it.
+            rad +=
+              radius *
               h.amp *
-              scale *
-              (0.2 + this.level * 0.45) *
-              Math.sin(h.k * theta + this.phase * h.speed + ring * 0.6);
+              strength *
+              Math.sin(h.k * theta + this.phase * h.speed + phaseShift);
           }
-          const x = mid + Math.cos(theta) * radius;
-          const y = mid + Math.sin(theta) * radius;
+          const x = mid + Math.cos(theta) * rad;
+          const y = mid + Math.sin(theta) * rad;
           if (i === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
         ctx.closePath();
-        ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
+      };
+
+      const strength = 0.2 + this.level * 0.45;
+
+      // Outer bloom. The outer stop is the inscribed circle, not a multiple of
+      // the orb: anything larger is still partly opaque where it meets the
+      // canvas edge, and the fill leaves a visible square halo around it.
+      const glow = ctx.createRadialGradient(
+        mid, mid, base * 0.55, mid, mid, Math.min(base * 2.0, mid)
+      );
+      glow.addColorStop(0, `rgba(${r},${g},${b},${0.2 + this.level * 0.26})`);
+      glow.addColorStop(0.55, `rgba(${r},${g},${b},${0.07 + this.level * 0.1})`);
+      glow.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      ctx.fillStyle = glow;
+      ctx.fillRect(0, 0, size, size);
+
+      // Two faint outriders, slightly larger and out of phase, to suggest the
+      // surface moving. Each is filled with its own fading gradient rather than
+      // a flat alpha: a flat fill has a hard rim, and two hard rims just
+      // outside the body read as concentric outlines drawn around the orb.
+      for (let i = 1; i <= 2; i++) {
+        const radius = base * (1 + i * 0.06);
+        const halo = ctx.createRadialGradient(
+          mid, mid, radius * 0.55, mid, mid, radius * 1.02
+        );
+        const a = 0.07 + this.level * 0.06;
+        halo.addColorStop(0, `rgba(${r},${g},${b},${a})`);
+        halo.addColorStop(0.7, `rgba(${r},${g},${b},${a * 0.6})`);
+        halo.addColorStop(1, `rgba(${r},${g},${b},0)`);
+        blob(radius, i * 1.9, strength);
+        ctx.fillStyle = halo;
         ctx.fill();
       }
 
-      // Core.
-      // Offset only slightly, and with a wide inner stop: a tight highlight
-      // high on the sphere reads as a second, smaller ball sitting inside the
-      // orb rather than as light falling on one surface.
-      const core = ctx.createRadialGradient(
-        mid, mid - base * 0.16, base * 0.16, mid, mid, base * 0.9
+      // The body: one fill, feathering to nothing at the rim. Drawn as a
+      // gradient rather than a flat shape with a highlight on top - a hard edge
+      // with a white spot reads as a billiard ball, which is a solid object,
+      // and this is meant to be a voice.
+      const body = ctx.createRadialGradient(
+        mid, mid - base * 0.2, base * 0.05, mid, mid, base * 1.02
       );
-      core.addColorStop(0, `rgba(255,255,255,${0.62 + this.level * 0.24})`);
-      core.addColorStop(0.32, `rgba(255,255,255,${0.2 + this.level * 0.14})`);
-      core.addColorStop(0.62, `rgba(${r},${g},${b},0.9)`);
-      core.addColorStop(1, `rgba(${r},${g},${b},0.42)`);
-      ctx.beginPath();
-      ctx.arc(mid, mid, base * 0.9, 0, TAU);
-      ctx.fillStyle = core;
+      body.addColorStop(0, `rgba(255,255,255,${0.85 + this.level * 0.12})`);
+      body.addColorStop(0.18, `rgba(${lighten(r, g, b, 0.55)},${0.95})`);
+      body.addColorStop(0.52, `rgba(${r},${g},${b},0.92)`);
+      body.addColorStop(0.82, `rgba(${r},${g},${b},0.5)`);
+      body.addColorStop(1, `rgba(${r},${g},${b},0)`);
+      blob(base, 0, strength);
+      ctx.fillStyle = body;
       ctx.fill();
 
       // The working state has no amplitude to show, so it gets a sweep instead

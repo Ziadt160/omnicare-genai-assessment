@@ -39,9 +39,21 @@
   let connected = false;
   let transcriptBubble = null;
   let answerBubble = null;   // the assistant bubble currently being spoken into
-  let orb = null;
   let startedAt = 0;
   let ticker = null;
+  let restoreFocusTo = null;
+  const remoteAudio = [];
+
+  /* Built now, not after `room.connect()` resolves.
+
+     The `TrackSubscribed` handler is registered before connect, so a track that
+     arrives during it - which is what happens when the agent is already in the
+     room - used to find `orb` still null and skip `attach` entirely. The
+     agent's audio was then never analysed and the orb sat still for the whole
+     call, while the assistant was speaking. Constructing it is cheap; `start()`
+     is what costs frames, and that is still deferred. */
+  const orb =
+    canvas && window.OmniCareOrb ? new window.OmniCareOrb(canvas) : null;
 
   function setVoiceState(text, kind) {
     state.hidden = false;
@@ -179,11 +191,48 @@
      hanging up to re-read an answer, which is the opposite of the point - the
      call and the conversation are one thread. */
 
+  /* A full-screen overlay that does not move focus leaves a keyboard user
+     tabbing through the chat behind it, invisibly, and a screen reader reading
+     the conversation and the call as one continuous document. */
+  function setBackgroundInert(on) {
+    for (const el of [document.querySelector("main"),
+                      document.querySelector(".masthead"),
+                      document.getElementById("composer")]) {
+      if (!el) continue;
+      if (on) el.setAttribute("aria-hidden", "true");
+      else el.removeAttribute("aria-hidden");
+      // `inert` also takes them out of the tab order where it is supported;
+      // aria-hidden alone would leave focusable controls reachable.
+      el.inert = on;
+    }
+  }
+
+  function restoreFocus() {
+    // Only if focus is still inside the overlay: the caller may have clicked
+    // into the chat, and yanking focus back would be worse than leaving it.
+    const inside = panel && panel.contains(document.activeElement);
+    if (restoreFocusTo && (inside || document.activeElement === document.body)) {
+      restoreFocusTo.focus();
+    }
+    restoreFocusTo = null;
+  }
+
   function openCall() {
     if (panel) panel.hidden = false;
     if (returnBar) returnBar.hidden = true;
     mic.title = "Return to the call";
     mic.setAttribute("aria-label", "Return to the call");
+    if (panel) {
+      restoreFocusTo =
+        document.activeElement && document.activeElement !== document.body
+          ? document.activeElement
+          : mic;
+      setBackgroundInert(true);
+      // The panel itself, not the first button: "Back to chat" being read out
+      // first tells a screen-reader user how to leave before telling them what
+      // they arrived at.
+      panel.focus();
+    }
     if (orb) {
       // Measure after unhiding: the canvas is sized in `vmin` by the
       // stylesheet, so its box is 0 while the panel is hidden.
@@ -195,6 +244,8 @@
   }
 
   function minimiseCall() {
+    setBackgroundInert(false);
+    restoreFocus();
     if (panel) panel.hidden = true;
     if (returnBar) returnBar.hidden = false;
     if (orb) orb.pause();
@@ -202,11 +253,34 @@
     mic.setAttribute("aria-label", "Return to the call");
   }
 
+  /* `track.attach()` hands back an <audio> element and appending it was the end
+     of the story - so every call left one on the page, and a stale element can
+     still be playing the previous call underneath the new one. */
+  function trackAudio(el) {
+    el.autoplay = true;
+    document.body.appendChild(el);
+    remoteAudio.push(el);
+    return el;
+  }
+
+  function untrackAudio(el) {
+    const i = remoteAudio.indexOf(el);
+    if (i >= 0) remoteAudio.splice(i, 1);
+    el.remove();
+  }
+
+  function releaseAudio() {
+    while (remoteAudio.length) remoteAudio.pop().remove();
+  }
+
   function closeCall() {
     if (panel) panel.hidden = true;
     if (returnBar) returnBar.hidden = true;
     if (orb) orb.stop();
+    releaseAudio();
     stopTicker();
+    setBackgroundInert(false);
+    restoreFocus();
   }
 
   function startTicker() {
@@ -274,8 +348,12 @@
        the orb so the animation is driven by real audio rather than a timer. */
     room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
       if (track.kind !== "audio") return;
-      document.body.appendChild(track.attach());
+      trackAudio(track.attach());
       if (orb) orb.attach(track.mediaStreamTrack, "agent");
+    });
+
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+      if (track.kind === "audio") track.detach().forEach(untrackAudio);
     });
 
     /* Transcripts, the answer, citations and queue position all arrive here so
@@ -298,8 +376,7 @@
       mic.classList.add("btn--live");
       mic.title = "Stop voice";
 
-      if (canvas && window.OmniCareOrb) {
-        orb = orb || new window.OmniCareOrb(canvas);
+      if (orb) {
         const pub = room.localParticipant.getTrackPublication(
           LivekitClient.Track.Source.Microphone
         );
@@ -311,6 +388,16 @@
       startTicker();
       setPhase("Listening", "listening");
     } catch {
+      // Let go of the Room and its listeners. Without this a failed attempt
+      // left them attached and the next one overwrote the reference, so
+      // every retry added another set of handlers to a room nobody could reach.
+      try {
+        await room.disconnect();
+      } catch {
+        /* it never connected */
+      }
+      room = null;
+      releaseAudio();
       disableVoice("Voice could not connect — chat works normally.");
       window.OmniCare.addMessage(
         "system",
@@ -321,8 +408,19 @@
   }
 
   async function stop() {
-    if (room) await room.disconnect();
+    // `room = null` before awaiting: a disconnect that throws must still leave
+    // the UI able to start a new call rather than stuck showing a live one.
+    const leaving = room;
     room = null;
+    connected = false;
+    closeCall();
+    if (leaving) {
+      try {
+        await leaving.disconnect();
+      } catch {
+        /* already gone */
+      }
+    }
   }
 
   /* While a call is running the mic reopens it rather than hanging up. Ending
@@ -346,7 +444,12 @@
      check that a spoken answer reaches the transcript is to feed the real
      messages to the real handler in a real browser. Driving it through an actual
      call would need a microphone and an SFU to assert on a DOM node. */
-  window.OmniCareVoice = { handleData, endTurn, openCall, minimiseCall, closeCall };
+  window.OmniCareVoice = {
+    handleData, endTurn, openCall, minimiseCall, closeCall,
+    orb: () => orb,
+    _trackAudio: trackAudio,
+    _releaseAudio: releaseAudio,
+  };
 
   probe();
 })();
