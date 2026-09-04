@@ -61,7 +61,8 @@
   <!-- The call surface. A conversation over audio has nothing on screen to say
        whether the assistant is listening, working or talking; the orb is driven
        by the actual audio, so if it moves, media is flowing. -->
-  <section id="voice-panel" class="voice" hidden aria-label="Voice call">
+  <section id="voice-panel" class="voice" hidden role="dialog" aria-modal="true"
+           aria-label="Voice call" tabindex="-1">
     <div class="voice__bar">
       <button id="voice-back" class="voice__back" type="button">
         <span aria-hidden="true">&#8592;</span> Back to chat

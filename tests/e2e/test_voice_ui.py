@@ -45,22 +45,35 @@ pytestmark = [
 ]
 
 
-@pytest.fixture()
-def page():
-    """A freshly loaded page, with the voice handler available."""
+@pytest.fixture(scope="module")
+def browser():
+    """One browser for the module, not one per test.
+
+    Launching Chrome per test worked in isolation and errored intermittently
+    when the whole suite ran - twenty-odd concurrent launches is enough to time
+    one out. A suite that only passes when run alone is not a passing suite.
+    """
     pytest.importorskip("playwright.sync_api")
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
         try:
-            browser = pw.chromium.launch(channel="chrome", headless=True)
+            b = pw.chromium.launch(channel="chrome", headless=True)
         except Exception as exc:
             pytest.skip(f"no system Chrome to drive: {exc}")
-        p = browser.new_page()
-        p.goto(FRONTEND, wait_until="networkidle")
-        p.wait_for_function("() => window.OmniCareVoice !== undefined", timeout=10_000)
-        yield p
-        browser.close()
+        yield b
+        b.close()
+
+
+@pytest.fixture()
+def page(browser):
+    """A fresh page per test: the DOM is the thing under test, so it must not
+    carry over, but the browser process can."""
+    p = browser.new_page()
+    p.goto(FRONTEND, wait_until="networkidle")
+    p.wait_for_function("() => window.OmniCareVoice !== undefined", timeout=10_000)
+    yield p
+    p.close()
 
 
 def feed(page, *messages: dict) -> None:
@@ -319,16 +332,22 @@ def test_the_orb_stops_drawing_when_it_is_not_on_screen(page) -> None:
             const c = document.createElement('canvas');
             c.width = c.height = 200;
             const orb = new window.OmniCareOrb(c);
+            // A stand-in for a live analyser: what matters is whether pause
+            // keeps it and stop clears it, not how it was built.
+            orb.analysers.agent = {node: null, buf: null};
             orb.start();
             const while_open = orb.raf !== null;
             orb.pause();
             const while_hidden = orb.raf !== null;
-            const kept_audio = orb.analysers !== null;
+            const kept_audio = orb.analysers.agent !== null;
             orb.stop();
-            return [while_open, while_hidden, kept_audio];
+            const dropped_audio = orb.analysers.agent === null;
+            return [while_open, while_hidden, kept_audio, dropped_audio];
         }"""
     )
-    assert running == [True, False, True]
+    assert running == [True, False, True, True], (
+        "pause must keep the analyser; stop must release it"
+    )
 
 
 def test_the_hidden_attribute_actually_hides(page) -> None:
@@ -346,3 +365,91 @@ def test_the_hidden_attribute_actually_hides(page) -> None:
                  .map(el => el.id || el.className)"""
     )
     assert offenders == [], f"hidden but still displayed: {offenders}"
+
+
+# --------------------------------------------------------------- regressions
+
+def test_the_orb_exists_before_any_track_can_arrive(page) -> None:
+    """The orb used to be built after `await room.connect(...)`, while the
+    `TrackSubscribed` handler was registered before it.
+
+    So a track arriving during connect - which is what happens when the agent
+    is already in the room, on a rejoin or when the worker got there first -
+    found `orb` still null, skipped `attach`, and the agent's audio was never
+    analysed. The orb then sat perfectly still for the whole call, while the
+    assistant was speaking, which is the one moment it exists to show.
+    """
+    assert page.evaluate("() => window.OmniCareVoice.orb() !== null"), (
+        "the orb must exist before a room can hand it a track"
+    )
+
+
+def test_remote_audio_elements_do_not_pile_up(page) -> None:
+    """`track.attach()` appends an <audio> to the body and nothing removed it,
+    so every call left one behind - and a stale element can still be playing
+    the previous call's audio underneath the new one."""
+    counts = page.evaluate(
+        """() => {
+            const V = window.OmniCareVoice;
+            const before = document.querySelectorAll('audio').length;
+            // Two calls' worth of attachments, then a hang-up.
+            V._trackAudio(document.createElement('audio'));
+            V._trackAudio(document.createElement('audio'));
+            const during = document.querySelectorAll('audio').length;
+            V._releaseAudio();
+            return [before, during, document.querySelectorAll('audio').length];
+        }"""
+    )
+    before, during, after = counts
+    assert during == before + 2, "the elements were attached"
+    assert after == before, f"{after - before} audio element(s) left behind"
+
+
+# ------------------------------------------------------------- accessibility
+
+def test_the_call_takes_focus_and_gives_it_back(page) -> None:
+    """A full-screen overlay that does not move focus leaves a keyboard user
+    tabbing through the chat behind it, invisibly."""
+    page.focus("#mic")
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.wait_for_timeout(120)
+
+    inside = page.evaluate(
+        """() => document.getElementById('voice-panel')
+                 .contains(document.activeElement)"""
+    )
+    assert inside, "focus stayed behind the overlay"
+
+    page.evaluate("() => window.OmniCareVoice.minimiseCall()")
+    page.wait_for_timeout(120)
+    assert page.evaluate("() => document.activeElement.id") == "mic", (
+        "focus was not returned to the control that opened the call"
+    )
+
+
+def test_the_chat_is_hidden_from_assistive_tech_during_a_call(page) -> None:
+    """Otherwise a screen reader reads the conversation and the call surface as
+    one continuous document."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.wait_for_timeout(120)
+    hidden_during = page.evaluate(
+        "() => document.querySelector('main').getAttribute('aria-hidden')"
+    )
+    page.evaluate("() => window.OmniCareVoice.minimiseCall()")
+    page.wait_for_timeout(120)
+    hidden_after = page.evaluate(
+        "() => document.querySelector('main').getAttribute('aria-hidden')"
+    )
+
+    assert hidden_during == "true", "the chat is still exposed behind the call"
+    assert hidden_after in (None, "false"), "the chat stayed hidden after going back"
+
+
+def test_the_call_announces_itself_as_a_dialog(page) -> None:
+    panel = page.evaluate(
+        """() => {
+            const el = document.getElementById('voice-panel');
+            return [el.getAttribute('role'), el.getAttribute('aria-modal')];
+        }"""
+    )
+    assert panel == ["dialog", "true"]
