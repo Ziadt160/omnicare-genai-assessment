@@ -234,3 +234,115 @@ def test_amplitude_moves_the_orb(page) -> None:
         }"""
     )
     assert loud > quiet, f"a loud frame should cover more area ({loud} vs {quiet})"
+
+
+# ------------------------------------------------------ the call as a surface
+
+def viewport_fraction(page, selector: str) -> float:
+    """How much of the viewport the element covers."""
+    return page.evaluate(
+        """sel => {
+            const r = document.querySelector(sel).getBoundingClientRect();
+            return (r.width * r.height) / (window.innerWidth * window.innerHeight);
+        }""",
+        selector,
+    )
+
+
+def test_the_call_takes_the_whole_screen(page) -> None:
+    """On a call there is nothing to read and one thing to look at. A panel
+    wedged under the transcript said "widget" for what is the entire foreground
+    task."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.wait_for_timeout(150)
+
+    assert page.evaluate("() => document.getElementById('voice-panel').hidden") is False
+    assert viewport_fraction(page, "#voice-panel") > 0.95
+
+
+def test_going_back_to_the_chat_does_not_end_the_call(page) -> None:
+    """The call and the conversation are one thread, so hanging up to re-read an
+    answer would be exactly backwards. Minimising leaves the room connected and
+    only stops the drawing."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.evaluate("() => window.OmniCareVoice.minimiseCall()")
+    page.wait_for_timeout(150)
+
+    assert page.evaluate("() => document.getElementById('voice-panel').hidden") is True
+    assert page.evaluate("() => document.getElementById('voice-return').hidden") is False
+
+
+def test_a_minimised_call_can_be_returned_to(page) -> None:
+    """Without the return control a minimised call is a call you cannot get
+    back to."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.evaluate("() => window.OmniCareVoice.minimiseCall()")
+    page.click("#voice-return")
+    page.wait_for_timeout(150)
+
+    assert page.evaluate("() => document.getElementById('voice-panel').hidden") is False
+    assert page.evaluate("() => document.getElementById('voice-return').hidden") is True
+
+
+def test_escape_goes_back_rather_than_hanging_up(page) -> None:
+    """Escape is the dismiss gesture for an overlay. Dropping a live call on a
+    stray keypress would be a nasty surprise."""
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(150)
+
+    assert page.evaluate("() => document.getElementById('voice-panel').hidden") is True
+    assert page.evaluate("() => document.getElementById('voice-return').hidden") is False
+
+
+def test_the_chat_is_still_there_underneath(page) -> None:
+    """Going back must return the caller to the conversation they left, with the
+    transcript that the call has been writing into it."""
+    feed(page, {"type": "answer_delta", "text": "Covered up to $25,000."},
+         {"type": "state", "label": "listening", "kind": "ok"})
+    page.evaluate("() => window.OmniCareVoice.openCall()")
+    page.evaluate("() => window.OmniCareVoice.minimiseCall()")
+    page.wait_for_timeout(150)
+
+    assert "Covered up to $25,000." in assistant_texts(page)[-1]
+    assert page.evaluate(
+        "() => document.getElementById('composer').getBoundingClientRect().height"
+    ) > 0, "the composer is usable again"
+
+
+def test_the_orb_stops_drawing_when_it_is_not_on_screen(page) -> None:
+    """A hidden canvas still costs a frame every 16 ms. `pause` keeps the audio
+    graph - the agent's track has already been subscribed and will not fire
+    again - while stopping the paint loop."""
+    running = page.evaluate(
+        """() => {
+            const c = document.createElement('canvas');
+            c.width = c.height = 200;
+            const orb = new window.OmniCareOrb(c);
+            orb.start();
+            const while_open = orb.raf !== null;
+            orb.pause();
+            const while_hidden = orb.raf !== null;
+            const kept_audio = orb.analysers !== null;
+            orb.stop();
+            return [while_open, while_hidden, kept_audio];
+        }"""
+    )
+    assert running == [True, False, True]
+
+
+def test_the_hidden_attribute_actually_hides(page) -> None:
+    """A structural invariant, not a detail of one component.
+
+    `[hidden] { display: none }` comes from the UA stylesheet, so any author
+    rule that sets `display` on the same element outranks it. Two new
+    components did exactly that, and the full-screen call overlay sat over the
+    chat with `hidden` faithfully set - visible only as a click that landed on
+    nothing.
+    """
+    offenders = page.evaluate(
+        """() => [...document.querySelectorAll('[hidden]')]
+                 .filter(el => getComputedStyle(el).display !== 'none')
+                 .map(el => el.id || el.className)"""
+    )
+    assert offenders == [], f"hidden but still displayed: {offenders}"

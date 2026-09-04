@@ -31,12 +31,17 @@
   const caption = document.getElementById("voice-caption");
   const phase = document.getElementById("voice-phase");
   const hangup = document.getElementById("voice-hangup");
+  const back = document.getElementById("voice-back");
+  const returnBar = document.getElementById("voice-return");
+  const elapsed = document.getElementById("voice-elapsed");
 
   let room = null;
   let connected = false;
   let transcriptBubble = null;
   let answerBubble = null;   // the assistant bubble currently being spoken into
   let orb = null;
+  let startedAt = 0;
+  let ticker = null;
 
   function setVoiceState(text, kind) {
     state.hidden = false;
@@ -167,12 +172,59 @@
     }
   }
 
-  /* ----------------------------------------------------------- connection */
+  /* ------------------------------------------------------- the call surface */
 
-  function showPanel(on) {
-    if (!panel) return;
-    panel.hidden = !on;
-    document.body.classList.toggle("voice-live", on);
+  /* Three states, not two: the call is either closed, open full-screen, or
+     running while the caller reads the chat. Collapsing the last two would mean
+     hanging up to re-read an answer, which is the opposite of the point - the
+     call and the conversation are one thread. */
+
+  function openCall() {
+    if (panel) panel.hidden = false;
+    if (returnBar) returnBar.hidden = true;
+    mic.title = "Return to the call";
+    mic.setAttribute("aria-label", "Return to the call");
+    if (orb) {
+      // Measure after unhiding: the canvas is sized in `vmin` by the
+      // stylesheet, so its box is 0 while the panel is hidden.
+      orb.resize();
+      // Only paint while there is something on screen to paint on; a hidden
+      // canvas still costs a frame every 16 ms.
+      orb.start();
+    }
+  }
+
+  function minimiseCall() {
+    if (panel) panel.hidden = true;
+    if (returnBar) returnBar.hidden = false;
+    if (orb) orb.pause();
+    mic.title = "Return to the call";
+    mic.setAttribute("aria-label", "Return to the call");
+  }
+
+  function closeCall() {
+    if (panel) panel.hidden = true;
+    if (returnBar) returnBar.hidden = true;
+    if (orb) orb.stop();
+    stopTicker();
+  }
+
+  function startTicker() {
+    startedAt = Date.now();
+    const tick = () => {
+      const total = Math.floor((Date.now() - startedAt) / 1000);
+      const mins = Math.floor(total / 60);
+      const secs = String(total % 60).padStart(2, "0");
+      if (elapsed) elapsed.textContent = `${mins}:${secs}`;
+    };
+    tick();
+    ticker = setInterval(tick, 1000);
+  }
+
+  function stopTicker() {
+    if (ticker) clearInterval(ticker);
+    ticker = null;
+    if (elapsed) elapsed.textContent = "0:00";
   }
 
   async function start() {
@@ -211,9 +263,10 @@
       connected = false;
       mic.disabled = false;
       mic.classList.remove("btn--live");
+      mic.title = "Start voice";
+      mic.setAttribute("aria-label", "Start voice");
       setVoiceState("voice off", "idle");
-      showPanel(false);
-      if (orb) orb.stop();
+      closeCall();
       endTurn();
     });
 
@@ -253,9 +306,9 @@
         const micTrack = pub && pub.track && pub.track.mediaStreamTrack;
         if (micTrack) orb.attach(micTrack, "mic");
         orb.setState("listening");
-        orb.start();
       }
-      showPanel(true);
+      openCall();
+      startTicker();
       setPhase("Listening", "listening");
     } catch {
       disableVoice("Voice could not connect — chat works normally.");
@@ -272,15 +325,28 @@
     room = null;
   }
 
-  mic.addEventListener("click", () => (connected ? stop() : start()));
+  /* While a call is running the mic reopens it rather than hanging up. Ending
+     a call is deliberate and lives on one clearly-labelled control; a button
+     that starts a call on one press and drops it on the next is how you lose a
+     call you meant to return to. */
+  mic.addEventListener("click", () => (connected ? openCall() : start()));
+  if (back) back.addEventListener("click", minimiseCall);
+  if (returnBar) returnBar.addEventListener("click", openCall);
   if (hangup) hangup.addEventListener("click", () => stop());
+
+  /* Escape goes back to the chat rather than ending the call: it is the
+     dismiss gesture for an overlay, and dropping a call on a stray keypress
+     would be a nasty surprise. */
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && panel && !panel.hidden) minimiseCall();
+  });
 
   /* Exposed for the browser tests. The data-channel message set is the entire
      contract between the voice worker and this file, and the only honest way to
      check that a spoken answer reaches the transcript is to feed the real
      messages to the real handler in a real browser. Driving it through an actual
      call would need a microphone and an SFU to assert on a DOM node. */
-  window.OmniCareVoice = { handleData, endTurn };
+  window.OmniCareVoice = { handleData, endTurn, openCall, minimiseCall, closeCall };
 
   probe();
 })();
