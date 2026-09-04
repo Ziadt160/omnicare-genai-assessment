@@ -130,6 +130,35 @@ transcribed `POL-1092` extracted as `POL-1029`.
 
 ---
 
+### Where a fabricated policy number came from
+
+A second reported conversation: asked to file a theft claim, the assistant
+announced "Policy Number: POL-1092" without the policyholder ever saying it,
+then "Amount: $1,000 (estimated value)" and moved to file.
+
+POL-1092 appears **nowhere** in the system prompt. It was the `examples` value
+on `submit_claim`'s own schema. A tool schema is prompt text, and a model
+copies what it is shown. The same schema offered `CLM-8821` and `1200.00`, and
+all three are live rows in `mock_claims.json` - so a copied example does not
+merely invent a value, it files against a real policyholder's policy.
+
+Format now lives in the pattern and the description, neither of which can be
+pasted into a tool call as a value. A test asserts that no example in either
+tool's schema is a real record.
+
+The estimate is the other half. Rule 6 forbids estimating and the model
+estimated anyway, so the amount is checked rather than requested: it must be a
+figure the policyholder actually gave. That needed spoken amounts to work -
+"twelve hundred dollars" is how a caller says 1200.00, and refusing it would
+have made the gate a bug rather than a guard.
+
+Both belong to the same principle. The identifier and the amount on a permanent
+financial record must come from the person it belongs to, and Pydantic cannot
+enforce it: `POL-1092` and `$1,000` are both perfectly valid, and the only
+thing wrong with them is that nobody said them.
+
+---
+
 ### What a real filing conversation found
 
 Five faults in one exchange, none of which the scripted suite could reach.
@@ -436,14 +465,14 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 328 in-process, no container, no network
+make test        # 342 in-process, no container, no network
 pytest tests/e2e -m e2e   # 66 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 245 |
+| `tests/unit` | 259 |
 | `tests/contract` | 47 |
 | `tests/e2e` | 66 |
 | `evals` | 36 |

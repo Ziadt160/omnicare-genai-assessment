@@ -34,8 +34,11 @@ class GetClaimStatusArgs(BaseModel):
 
     claim_id: str = Field(
         pattern=CLAIM_ID_PATTERN,
-        description="Claim identifier in the exact form CLM-#### (e.g. CLM-8821).",
-        examples=["CLM-8821"],
+        description=(
+            "Claim identifier the policyholder gave you: the letters CLM, a "
+            "hyphen, then four digits. Never supply one they did not say - "
+            "asking is correct, guessing looks up someone else's claim."
+        ),
     )
 
 
@@ -48,29 +51,43 @@ class SubmitClaimArgs(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # No `examples` on the fields that carry the policyholder's own data.
+    #
+    # A tool schema is prompt text, and a model copies what it is shown. Asked
+    # to file a theft claim, qwen2.5 announced "Policy Number: POL-1092"
+    # without the policyholder ever saying it; POL-1092 appears nowhere in the
+    # system prompt - it was this field's example. CLM-8821 and 1200.00 were
+    # here too, and all three are live rows in mock_claims.json, so a copied
+    # example does not merely invent a value: it files against a real
+    # policyholder's policy. The pattern and the description carry the format,
+    # and neither can be pasted into a tool call as a value.
     policy_number: str = Field(
         pattern=POLICY_NUMBER_PATTERN,
-        description="Policy identifier, exactly POL-#### (e.g. POL-1092).",
-        examples=["POL-1092"],
+        description=(
+            "The policyholder's own policy number: the letters POL, a hyphen, "
+            "then four digits. Take it from what they told you. If they have "
+            "not given one, ask - never supply a number yourself."
+        ),
     )
     claim_type: ClaimType = Field(
         description="Must be one of the listed categories. Map the user's "
                     "wording onto the closest option and say which you chose.",
-        examples=["Water Damage"],
     )
     amount: Decimal = Field(
         gt=Decimal("0"),
         le=Decimal("1000000"),
         max_digits=12,
         decimal_places=2,
-        description="Claimed amount in USD, greater than 0. Never estimate this.",
-        examples=["1200.00"],
+        description=(
+            "The amount the policyholder stated, in USD. Never estimate it, "
+            "never round it, and never fill in a placeholder: if they have not "
+            "given a figure, ask for one. This becomes a permanent record."
+        ),
     )
     description: str = Field(
         min_length=10,
         max_length=1000,
         description="What happened, in the policyholder's own words.",
-        examples=["The washing machine hose burst and flooded the utility room."],
     )
 
     @field_serializer("amount")

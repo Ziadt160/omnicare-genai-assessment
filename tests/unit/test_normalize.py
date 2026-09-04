@@ -10,6 +10,7 @@ from libs.guardrails.normalize import (
     normalize_claim_id,
     normalize_policy_number,
     phonetic_readback,
+    spoken_amounts,
 )
 
 
@@ -107,3 +108,38 @@ def test_a_policy_number_is_not_read_as_a_claim_id() -> None:
     "claim" is a cue, and the digits after it belong to the policy."""
     assert normalize_policy_number("file a claim on policy POL 1092") == "POL-1092"
     assert normalize_claim_id("file a claim on policy POL 1092") is None
+
+
+# ---------------------------------------------------------- spoken amounts
+
+@pytest.mark.parametrize(
+    ("said", "expected"),
+    [
+        ("twelve hundred dollars", 1200),
+        ("fifteen hundred", 1500),
+        ("one thousand two hundred", 1200),
+        ("three thousand", 3000),
+        ("twenty five hundred", 2500),
+        ("nine hundred and fifty", 950),
+        ("it is 1500 usd", 1500),
+        ("$1,500.00", 1500),
+    ],
+)
+def test_a_spoken_amount_is_understood(said: str, expected: int) -> None:
+    """A caller says "twelve hundred dollars", never "1200.00".
+
+    The confirmation gate checks that the amount on a permanent record came
+    from the policyholder, so without this every voice claim would be refused
+    for an amount the caller had just said out loud.
+    """
+    assert expected in spoken_amounts(said)
+
+
+def test_words_that_are_not_amounts_yield_nothing() -> None:
+    assert spoken_amounts("my television was stolen") == set()
+    assert spoken_amounts("") == set()
+
+
+def test_a_section_number_is_not_an_amount() -> None:
+    """"Section 1" and "Section 2" are everywhere in this domain."""
+    assert spoken_amounts("under section two of my policy") == set()

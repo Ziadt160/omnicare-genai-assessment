@@ -116,6 +116,14 @@ class BM25Searcher:
         return await self.index.search(query, top_k) or self.index.chunks[:top_k]
 
 
+def _amount_in(message: str) -> str | None:
+    """The figure the policyholder stated, if any."""
+    from libs.guardrails.normalize import spoken_amounts
+
+    found = spoken_amounts(message)
+    return f"{max(found)}.00" if found else None
+
+
 def script_for(case: EvalCase, searcher: BM25Searcher) -> list:
     """Turn a case's *expectations* into the model's decisions.
 
@@ -151,7 +159,12 @@ def script_for(case: EvalCase, searcher: BM25Searcher) -> list:
             or normalize_policy_number(case.message)
             or "POL-1092",
             "claim_type": given.get("claim_type", "Water Damage"),
-            "amount": given.get("amount", "1200.00"),
+            # Taken from what the case's message actually says, as a competent
+            # model would. A fixed default filed 1200.00 against a message
+            # saying $1,500, which the confirmation gate refuses - correctly,
+            # since the amount on a permanent record must be the one the
+            # policyholder gave.
+            "amount": given.get("amount") or _amount_in(case.message) or "1200.00",
             "description": "Reported by the policyholder during this conversation.",
         }
         return [
