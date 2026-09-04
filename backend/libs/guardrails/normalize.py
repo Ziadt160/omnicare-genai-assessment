@@ -135,9 +135,13 @@ def _canonicalize(text: str, prefix: str, cues: tuple[str, ...]) -> str | None:
 # "twelve hundred" is a quantity.
 _SCALES = {"hundred": 100, "thousand": 1_000, "million": 1_000_000}
 
-# An amount below this is a section number, an item count or a stray digit.
-# Matches the floor the graph uses when reading figures out of an answer.
-_AMOUNT_FLOOR = 100
+# A floor applies to the spoken form only. "section two" and "my three items"
+# are number words that are not money, and in this domain they are common. A
+# figure someone actually wrote is different: "$99" is unambiguous, and a claim
+# for $99 is perfectly ordinary. Applying one floor to both refused a real
+# claim - CI caught it on "File a water damage claim on POL-1092 for $99".
+_SPOKEN_FLOOR = 100
+_WRITTEN_FLOOR = 1
 
 
 def spoken_amounts(text: str) -> set[int]:
@@ -156,7 +160,7 @@ def spoken_amounts(text: str) -> set[int]:
 
     for match in re.finditer(r"\d[\d,]*", text):
         digits = match.group().replace(",", "")
-        if digits.isdigit() and int(digits) >= _AMOUNT_FLOOR:
+        if digits.isdigit() and int(digits) >= _WRITTEN_FLOOR:
             found.add(int(digits))
 
     total = current = 0
@@ -179,11 +183,11 @@ def spoken_amounts(text: str) -> set[int]:
         elif raw == "and" and seen:
             continue
         else:
-            if seen and total + current >= _AMOUNT_FLOOR:
+            if seen and total + current >= _SPOKEN_FLOOR:
                 found.add(total + current)
             total = current = 0
             seen = False
-    if seen and total + current >= _AMOUNT_FLOOR:
+    if seen and total + current >= _SPOKEN_FLOOR:
         found.add(total + current)
 
     return found

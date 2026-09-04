@@ -143,3 +143,17 @@ def test_words_that_are_not_amounts_yield_nothing() -> None:
 def test_a_section_number_is_not_an_amount() -> None:
     """"Section 1" and "Section 2" are everywhere in this domain."""
     assert spoken_amounts("under section two of my policy") == set()
+
+
+def test_a_small_written_amount_is_an_amount() -> None:
+    """CI caught this: "File a water damage claim on POL-1092 for $99" was
+    refused, because one floor was being applied to written figures as well as
+    spoken ones. A $99 claim is perfectly ordinary."""
+    assert 99 in spoken_amounts("File a water damage claim on POL-1092 for $99")
+    assert 50 in spoken_amounts("it was about 50 dollars")
+
+
+def test_a_small_spoken_number_is_still_not_an_amount() -> None:
+    """The floor stays where the ambiguity is: number words."""
+    assert spoken_amounts("under section two of my policy") == set()
+    assert spoken_amounts("three items were taken") == set()
