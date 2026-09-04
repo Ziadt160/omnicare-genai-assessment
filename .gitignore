@@ -23,8 +23,10 @@ data/mock_claims.json.tmp
 .voice_token
 .voice_url
 
-# Editors / OS
+# Editors / OS / assistants
 .vscode/
 .idea/
+.claude/
+CLAUDE.md
 .DS_Store
 Thumbs.db
