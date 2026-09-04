@@ -31,6 +31,7 @@
   const caption = document.getElementById("voice-caption");
   const phase = document.getElementById("voice-phase");
   const hangup = document.getElementById("voice-hangup");
+  const meta = document.getElementById("voice-meta");
   const back = document.getElementById("voice-back");
   const returnBar = document.getElementById("voice-return");
   const elapsed = document.getElementById("voice-elapsed");
@@ -61,8 +62,43 @@
     state.className = "pill pill--" + kind;
   }
 
+  /* What a policyholder should see while a tool runs. `search_policy_documents`
+     is the function's name; it belongs in the chip, where it is evidence of what
+     ran, not in the status line, where it is just jargon mid-call. */
+  const PHASE_LABELS = {
+    search_policy_documents: "Checking your policy",
+    get_claim_status: "Checking that claim",
+    submit_claim: "Preparing the claim",
+  };
+
+  function phaseLabel(raw) {
+    return PHASE_LABELS[raw] || raw;
+  }
+
+  /* Everything the current answer rests on, on the call surface itself.
+
+     Citations replace rather than stack: they describe the whole turn, so a
+     second `sources` event is a restatement, not an addition, and appending it
+     shows the same section twice under one answer. Tool chips do stack - two
+     tools running is two facts. */
+  function showOnCall(node) {
+    if (!meta) return;
+    if (node.classList.contains("sources")) {
+      const existing = meta.querySelector(".sources");
+      if (existing) {
+        existing.replaceWith(node);
+        return;
+      }
+    }
+    meta.appendChild(node);
+  }
+
+  function clearOnCall() {
+    if (meta) meta.replaceChildren();
+  }
+
   function setPhase(label, orbState) {
-    if (phase) phase.textContent = label;
+    if (phase) phase.textContent = phaseLabel(label);
     if (orb && orbState) orb.setState(orbState);
   }
 
@@ -154,6 +190,10 @@
         transcriptBubble.textContent = msg.text;
       }
     } else if (msg.type === "transcript_final") {
+      // A new question: whatever the last answer rested on no longer applies,
+      // and leaving it up would attribute this answer to a section that was
+      // never consulted for it.
+      clearOnCall();
       if (caption) caption.textContent = msg.text;
       if (transcriptBubble) {
         transcriptBubble.textContent = msg.text;
@@ -169,9 +209,13 @@
       if (caption) caption.textContent = "";
       appendAnswer(msg.text);
     } else if (msg.type === "sources") {
+      // Both places: the call surface, so it is visible while the answer is
+      // being spoken, and the thread, so it survives the call.
       decorate(window.OmniCare.renderSources(msg.sources || []));
+      showOnCall(window.OmniCare.renderSources(msg.sources || []));
     } else if (msg.type === "tool") {
       decorate(window.OmniCare.renderToolCalls([msg]));
+      showOnCall(window.OmniCare.renderToolCalls([msg]));
     } else if (msg.type === "confirm") {
       // Spoken readback is handled by TTS; the panel mirrors it visually so the
       // policyholder can check the digits by eye as well as by ear - and it goes
@@ -289,6 +333,7 @@
     if (panel) panel.hidden = true;
     if (returnBar) returnBar.hidden = true;
     if (orb) orb.stop();
+    clearOnCall();
     releaseAudio();
     stopTicker();
     setBackgroundInert(false);
