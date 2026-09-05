@@ -130,6 +130,28 @@ transcribed `POL-1092` extracted as `POL-1029`.
 
 ---
 
+### What the second model found
+
+Switching from Ollama to Groq for an afternoon turned up a bug neither model
+alone would have shown.
+
+gpt-oss-120b writes "Section 1" with a **narrow no-break space** (U+202F) inside
+it, and wraps its citations in markdown emphasis. Neither changes what the
+citation says, but both broke a character-for-character comparison: the correct
+citation did not match the canonical one, was judged a fabrication, and was
+deleted - leaving answers ending on a dangling `**Citation:**` with nothing after
+it. qwen2.5 writes plain ASCII, so the whole suite was green.
+
+The comparison now flattens typography and emphasis before matching, and an
+introducing label left pointing at nothing is removed with the thing it
+introduced. Both are comparison-only: the model's own punctuation reaches the
+reader untouched.
+
+This is the argument for running on two providers rather than one. It is also a
+reminder that a passing suite means "no test noticed", not "nothing is wrong".
+
+---
+
 ### The policy's own limits, read from the policy
 
 ![A claim above the policy limit, refused with the wording quoted](images/13-over-limit.png)
@@ -517,14 +539,14 @@ a dashboard.
 ## What the tests cover
 
 ```bash
-make test        # 362 in-process, no container, no network
+make test        # 370 in-process, no container, no network
 pytest tests/e2e -m e2e   # 68 against the running stack
 make eval        # the behavioural gate
 ```
 
 | Layer | Count |
 |---|---:|
-| `tests/unit` | 278 |
+| `tests/unit` | 286 |
 | `tests/contract` | 47 |
 | `tests/e2e` | 68 |
 | `evals` | 37 |
