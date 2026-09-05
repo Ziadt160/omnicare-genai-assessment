@@ -437,6 +437,33 @@ def _sections_by_figure(text: str, retrieved: list[dict[str, Any]]) -> list[str]
     return out
 
 
+# Spaces and dashes a model may render typographically. Narrow no-break space
+# (U+202F) is the one that mattered: gpt-oss-120b puts it inside "Section 1".
+_TYPOGRAPHIC = {
+    " ": " ", " ": " ", " ": " ", " ": " ",
+    "‐": "-", "‑": "-", "‒": "-", "–": "-",
+    "—": "-", "−": "-",
+    "‘": "'", "’": "'", "“": '"', "”": '"',
+}
+
+
+def _typographic(text: str) -> str:
+    """A citation with its typography flattened, for comparison only.
+
+    Never used for what is displayed: the model's own punctuation is left
+    alone. This exists so that "Section" + a narrow no-break space + "1" is
+    recognised as the section it plainly is, rather than deleted as a
+    fabrication."""
+    for odd, plain in _TYPOGRAPHIC.items():
+        text = text.replace(odd, plain)
+    # Markdown emphasis around the citation is the model decorating it, not
+    # naming a different section: "*sample_policy.md - Section 2: ...*" was
+    # captured with its trailing asterisk, failed the comparison, and the whole
+    # citation was deleted as a fabrication.
+    text = text.strip(" *_`\"'.,;:")
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 def _named_sections(text: str, retrieved: list[dict[str, Any]]) -> list[str]:
     """Which retrieved sections the answer explicitly names.
 
@@ -518,6 +545,23 @@ def make_readback_node():
     return readback
 
 
+# A label the model wrote to introduce a citation. When the citation after it
+# is removed, the label is left pointing at nothing.
+_ORPHANED_LABEL = re.compile(
+    r"\n?\s*[*_`]*\s*(?:citation|source|reference)s?\s*:?\s*[*_`]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _drop_orphaned_label(text: str) -> str:
+    """Remove a trailing "Citation:" that no longer introduces anything.
+
+    Seen on gpt-oss-120b: it ends an answer with a **Citation:** heading, and
+    when the citation following it is stripped the answer stops on a colon.
+    The label was only ever punctuation for the thing it pointed at."""
+    return _ORPHANED_LABEL.sub("", text).rstrip()
+
+
 def make_ground_node():
     """Layer 5: sources are what the answer actually used, and nothing else.
 
@@ -569,11 +613,20 @@ def make_ground_node():
 
         text = str(final.content)
         claimed = [c.strip() for c in _CITATION_RE.findall(text)]
-        invented = [c for c in claimed if c not in valid]
+        # Compared with typography normalised, not character for character.
+        # gpt-oss-120b writes "Section 1" with a narrow no-break space, so
+        # its perfectly correct citation did not match, was judged invented,
+        # and was deleted - leaving the answer ending on a dangling
+        # "**Citation:**" with nothing after it. A citation destroyed by a
+        # space is worse than no check at all, and this was invisible on
+        # qwen2.5, which writes plain ASCII. Two models, two typographies.
+        canonical = {_typographic(c) for c in valid}
+        invented = [c for c in claimed if _typographic(c) not in canonical]
 
         for bad in invented:
             text = text.replace(bad, "").replace("()", "").replace("[]", "")
         text = re.sub(r"[ \t]{2,}", " ", text).strip()
+        text = _drop_orphaned_label(text)
 
         # A statement whose own numbers disprove it is removed for the same
         # reason a fabricated citation is: both are things the model asserted

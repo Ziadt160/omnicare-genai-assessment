@@ -36,6 +36,9 @@ SECTION_1 = Chunk(
     char_start=42,
     char_end=229,
 )
+NL = chr(10)
+SECTION_MARK = chr(0xa7)
+
 CITATION_1 = "sample_policy.md § Section 1: Home Water Damage Coverage"
 
 SECTION_2 = Chunk(
@@ -1128,3 +1131,79 @@ async def test_a_successful_tool_call_is_still_ok(repo, searcher) -> None:
     ])
     out = await run(make(llm, repo, searcher), "status of CLM-8821?")
     assert out["tool_invocations"][0]["status"] == "ok"
+
+
+# ------------------------------------------- typography is not a fabrication
+
+async def test_a_citation_written_with_typographic_spaces_survives(
+    repo, both_sections
+) -> None:
+    """Found by switching model, which is the point of running on two.
+
+    gpt-oss-120b writes "Section 1" - a narrow no-break space - so its
+    citation string did not match the canonical one character for character,
+    was judged invented, and was deleted. The answer then ended on a dangling
+    "**Citation:**" with nothing after it, and a correct, honest citation had
+    been destroyed by a space.
+    """
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe"}),
+        TextTurn(
+            "A sudden burst is covered up to $25,000.\n\n"
+            "**Citation:** sample_policy.md § Section 1: Home Water "
+            "Damage Coverage"
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "A pipe burst. Am I covered?")
+
+    answer = out["messages"][-1].content
+    assert "Home Water Damage Coverage" in answer, "a real citation was deleted"
+    assert out["sources"] == [CITATION_1]
+
+
+async def test_a_fabricated_citation_is_still_stripped_through_typography(
+    repo, both_sections
+) -> None:
+    """The relaxation must not become a hole: normalising whitespace must not
+    let an invented section through because it was written with a fancy
+    space."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "earthquake"}),
+        TextTurn(
+            "Covered (sample_policy.md § Section 7: Earthquake Coverage)."
+        ),
+    ])
+    out = await run(make(llm, repo, both_sections), "Is earthquake damage covered?")
+
+    assert "Earthquake" not in out["messages"][-1].content
+
+
+@pytest.mark.parametrize(
+    ("written", "kept"),
+    [
+        ("Covered up to $25,000." + NL + NL + "**Citation:**", "Covered up to $25,000."),
+        ("Covered." + NL + "Sources:", "Covered."),
+        ("Covered." + NL + "*Reference:*", "Covered."),
+        # Nothing to clean up.
+        ("Covered up to $25,000.", "Covered up to $25,000."),
+        ("See **Citation:** sample_policy.md", "See **Citation:** sample_policy.md"),
+    ],
+)
+def test_a_label_left_pointing_at_nothing_is_removed(written, kept) -> None:
+    """gpt-oss-120b ends an answer with a **Citation:** heading. When the
+    citation after it is stripped, the answer stops on a colon - the label was
+    only ever punctuation for the thing it introduced."""
+    from agent.app.graph.nodes import _drop_orphaned_label
+
+    assert _drop_orphaned_label(written) == kept
+
+
+def test_markdown_emphasis_around_a_citation_is_not_a_fabrication() -> None:
+    """A model decorating its citation is not naming a different section.
+    Captured with its trailing asterisk, the comparison failed and the whole
+    citation was deleted."""
+    from agent.app.graph.nodes import _typographic
+
+    assert _typographic("*sample_policy.md " + SECTION_MARK + " Section 1: Home Water Damage Coverage*") == (
+        _typographic("sample_policy.md " + SECTION_MARK + " Section 1: Home Water Damage Coverage")
+    )

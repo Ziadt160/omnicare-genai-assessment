@@ -8,7 +8,7 @@ looks up existing claims, and files new ones — never without confirming first.
 
 > **Status:** running and verified from a clean clone. `docker compose up`
 > with no configuration at all brings up eight containers and answers;
-> **430 tests pass**, including **66 end-to-end against the live containers**;
+> **438 tests pass**, including **66 end-to-end against the live containers**;
 > all six eval gates are green; the voice worker registers, is dispatched, and
 > speaks. See [Verification](#verification) and the
 > [walkthrough](docs/walkthrough.md).
@@ -231,11 +231,11 @@ change the shape of a file we were told to append to.
 
 ## Verification
 
-**In-process — 362 tests, no container, no network:**
+**In-process — 370 tests, no container, no network:**
 
 | Layer | Count | Covers |
 |---|---:|---|
-| `tests/unit` | 278 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
+| `tests/unit` | 286 | Chunking, the BM25 analyzer, RRF, injection screening, spoken-form normalization, `Decimal` round-trip, retry/breaker/idempotency, worker event emission, both vector-store adapters, and the whole agent graph on `FakeLLM` |
 | `tests/contract` | 47 | Graded request/response shapes, 422 on unknown keys, the queue round-trip, retrieval search and ingest, adapter selection |
 | `evals` | 37 | 35 behavioural cases plus the aggregate gate |
 
@@ -435,7 +435,7 @@ doing so rather than trusting a green in-process suite:
 
 `git clone` then `docker compose up --build`, with no `.env` and no key: eight
 containers, the frontend on :3000, the graded health body, and coverage answers
-with real citations from real embeddings. Then `pytest` — 430 pass, and the e2e
+with real citations from real embeddings. Then `pytest` — 438 pass, and the e2e
 tests skip rather than fail when no stack is running. A GitHub Actions workflow
 (`.github/workflows/ci.yml`) runs both: the offline suite, and `docker compose
 up` proving the graded contract with no credentials.
