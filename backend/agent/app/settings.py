@@ -23,6 +23,32 @@ class AgentSettings(BaseSettings):
     llm_fallback_provider: str = ""
     llm_fallback_api_key: str = ""
 
+    # A ceiling on one reply. Not a style setting - the prompt is what makes
+    # answers short - but the backstop for the failure a prompt cannot reach: a
+    # small model that starts restating the policy and does not stop. Observed:
+    # a coverage question answered with both sections in full, then the same
+    # content again under a "Summary" heading.
+    #
+    # Deliberately generous. This truncates mid-sentence when it bites, and a
+    # coverage answer cut in half is worse than a long one, so it sits well
+    # above any answer that is actually doing its job (a limit, a deductible
+    # and an exclusion is ~120 tokens) and only catches a reply that has
+    # stopped making progress.
+    #
+    # 800, not the 350 that was right for qwen2.5:7b, because a reasoning model
+    # spends completion tokens before it emits anything. Measured against
+    # gpt-oss-120b on Groq: a one-sentence answer about a burst pipe cost 220
+    # completion tokens, and the same request capped at 200 returned nothing at
+    # all - "max completion tokens reached before generating a valid document".
+    # A cap tuned on a non-reasoning model silently truncates a reasoning one,
+    # and the failure looks like the model being broken rather than the setting
+    # being wrong.
+    #
+    # This belongs in the per-provider env files rather than here: set
+    # LLM_MAX_TOKENS=350 in .env.local-ollama to keep the tighter leash on the
+    # 7B, which rambles without it.
+    llm_max_tokens: int = 800
+
     # Egress limiting, against the provider's own RPM. Distinct from the
     # gateway's ingress limiter: different window, different key, different
     # failure behaviour. Conflating them is the classic mistake.

@@ -44,6 +44,22 @@ def build_policy_tool(searcher: PolicySearcher) -> StructuredTool:
                 for c in chunks
             ],
             "citations": list(dict.fromkeys(c.citation for c in chunks)),
+            # Which section actually answers the question.
+            #
+            # The policy has two sections and top_k is 3, so every search
+            # returns the whole document - and a model handed the whole
+            # document recites the whole document. Asked about a jewellery
+            # theft it explained the water-damage exclusions too, which is
+            # noise the reader has to filter out of an answer about their
+            # stolen jewellery.
+            #
+            # Ranked, not filtered. Dropping the lower-ranked sections would be
+            # the obvious fix and the wrong one: the embedder puts Personal
+            # Property above Home Water Damage for "what is my deductible?",
+            # so a wrong first pick would leave the model unable to answer at
+            # all. Everything retrieved is still here; this only says where to
+            # start.
+            "best_match": chunks[0].citation if chunks else None,
         }
 
     search_policy_documents.__doc__ = """Search the OmniCare policy documents for coverage rules, limits and exclusions.
@@ -57,6 +73,11 @@ def build_policy_tool(searcher: PolicySearcher) -> StructuredTool:
 
     Always call this before answering. Never answer from memory, and never say
     a section does not exist without searching first.
+
+    This returns whatever the document holds, which is usually more than your
+    question needs. `best_match` names the section that answers it - answer
+    from that one, and leave the others out unless the question genuinely spans
+    them.
 
     You do NOT need a policy number to use this. There is one policy document
     and it is the same for every policyholder, so a coverage question can

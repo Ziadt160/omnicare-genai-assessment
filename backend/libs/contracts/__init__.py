@@ -12,6 +12,7 @@ from .claims import (
     Claim,
     ClaimStatus,
     ClaimType,
+    EstimateClaimPaymentArgs,
     GetClaimStatusArgs,
     SubmitClaimArgs,
 )
@@ -27,7 +28,8 @@ from .voice import (
 __all__ = [
     "Channel", "ChatRequest", "ChatResponse", "DeepHealthResponse", "HealthResponse",
     "ToolCall",
-    "Claim", "ClaimStatus", "ClaimType", "GetClaimStatusArgs", "SubmitClaimArgs",
+    "Claim", "ClaimStatus", "ClaimType", "EstimateClaimPaymentArgs",
+    "GetClaimStatusArgs", "SubmitClaimArgs",
     "RunEvent", "RunEventType",
     "Chunk", "SearchPolicyArgs", "SearchResult",
     "VoiceTokenRequest", "VoiceTokenResponse",

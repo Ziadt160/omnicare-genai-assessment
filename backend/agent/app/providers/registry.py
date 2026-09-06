@@ -89,7 +89,12 @@ def resolve(
     )
 
 
-def build_chat_model(config: ProviderConfig, temperature: float = 0.0, timeout: float = 20.0):
+def build_chat_model(
+    config: ProviderConfig,
+    temperature: float = 0.0,
+    timeout: float = 20.0,
+    max_tokens: int | None = None,
+):
     """One client for every provider. Imported lazily so the tests that use
     FakeLLM never need langchain-openai installed."""
     if config.name == "fake":
@@ -105,6 +110,10 @@ def build_chat_model(config: ProviderConfig, temperature: float = 0.0, timeout: 
         api_key=config.api_key,
         temperature=temperature,
         timeout=timeout,
+        # The backstop against a reply that will not stop. See
+        # AgentSettings.llm_max_tokens - the prompt is what makes answers
+        # short; this only catches one that has stopped making progress.
+        max_tokens=max_tokens or None,
         max_retries=0,  # retry policy lives in libs.resilience, not the SDK
     )
 

@@ -27,6 +27,10 @@ pytestmark = pytest.mark.e2e
 
 FRONTEND = os.environ.get("FRONTEND_URL", "http://127.0.0.1:3000")
 
+# Written out rather than escaped inline: these cases are about line-leading
+# markers, so a literal newline is the thing under test.
+NEWLINE = chr(10)
+
 
 def _reachable() -> bool:
     try:
@@ -85,7 +89,15 @@ def render():
 # ------------------------------------------------------------------ safety
 
 # The only elements the renderer is allowed to create.
-ALLOWED = {"strong", "em", "br", "p"}
+#
+# Block elements joined this set when the renderer learned headings and lists -
+# an answer was reaching the screen with "### Section 1" and "- **Coverage**:"
+# shown literally. Widening an allowlist is exactly the kind of change that can
+# quietly loosen a safety test, so: every element below comes from the
+# renderer's own template strings and none of them can be produced by anything
+# the model wrote. Escaping still runs first, and the property these cases
+# guard is unchanged - nothing in model output becomes an element.
+ALLOWED = {"strong", "em", "br", "p", "code", "h3", "h4", "ul", "ol", "li"}
 
 
 @pytest.mark.parametrize(
@@ -146,6 +158,52 @@ def test_paragraph_breaks_survive(render) -> None:
     assert "</p><p>" in out
 
 
-def test_plain_text_is_unchanged(render) -> None:
+def test_plain_text_gains_nothing_but_its_paragraph(render) -> None:
+    """The bubble body is a div now, so a paragraph needs a real <p>. It used
+    to be a <p> itself, and the renderer emitted a bare string into it.
+
+    What must still hold is that plain text picks up no markup of its own.
+    """
     text = "Claim CLM-8821 is Approved."
-    assert render(text) == text
+    assert render(text) == f"<p>{text}</p>"
+
+
+def test_headings_become_headings(render) -> None:
+    """Reported with a screenshot: "### Section 1: Home Water Damage Coverage"
+    on screen with the hashes showing, because the renderer knew bold and
+    paragraph breaks and nothing else."""
+    out = render("### Section 1: Home Water Damage Coverage")
+    assert "#" not in out
+    assert "Section 1: Home Water Damage Coverage" in out
+    assert render.elements("### Section 1") == ["h4"]
+
+
+def test_heading_levels_are_demoted_and_capped(render) -> None:
+    """The answer sits inside a chat bubble, so a model that starts at "#"
+    must not tower over the conversation. Every level shifts down by two and
+    stops at h4."""
+    assert render.elements("# Top") == ["h3"]
+    assert render.elements("## Second") == ["h4"]
+    assert render.elements("###### Sixth") == ["h4"]
+
+
+def test_bullets_become_a_list(render) -> None:
+    out = render("- **Coverage**: sudden pipe bursts.")
+    assert "<strong>Coverage</strong>" in out
+    assert render.elements("- one" + NEWLINE + "- two") == ["ul", "li", "li"]
+
+
+def test_numbered_lists_stay_ordered(render) -> None:
+    assert render.elements("1. first" + NEWLINE + "2. second") == ["ol", "li", "li"]
+
+
+def test_a_heading_does_not_swallow_the_line_beneath_it(render) -> None:
+    out = render("### Summary" + NEWLINE + "You pay $500.")
+    assert "You pay $500." in out
+    assert "<h4" in out
+
+
+def test_money_at_the_start_of_a_line_is_not_a_list(render) -> None:
+    """A hyphen means a bullet only with a space after it. "-$500" is a
+    negative amount and a coverage answer is full of figures."""
+    assert render.elements("-$500 adjustment") == ["p"]

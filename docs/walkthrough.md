@@ -194,13 +194,53 @@ refuse a valid claim while quoting a figure that does not govern it. And it
 be read, proceeds. Refusing on a limit that could not be verified is the worse
 error, and the confirmation gate still applies either way.
 
-The refusal quotes the wording, because "your policy covers this up to $25,000"
+The answer quotes the wording, because "your policy covers this up to $25,000"
 is checkable by the policyholder and "the limit is $25,000" is one more
 assertion - which is what this whole layer exists to avoid.
 
-One thing the screenshot also shows: the `submit_claim` chip is red. "ok" used
-to mean "the tool returned", so a refused write showed a green chip that reads
-as *filed*.
+> The screenshot above predates the change described next: it shows the claim
+> being **refused**. Re-run `scripts/capture_walkthrough.py` against the stack
+> to replace it.
+
+### From a refusal to a split
+
+Refusing was the wrong answer, and it took writing it down to see why. A
+$250,000 loss against a section covering $25,000 is not an invalid claim. It is
+a claim the policy pays $25,000 of. Telling someone it "cannot be filed because
+it exceeds the limit" is a decision the system was never entitled to make, and
+it leaves them with no idea what they would actually have received.
+
+So the same figures now answer the question a policyholder actually asks - not
+"what is the limit" but **"what do I pay"**:
+
+```
+Claim amount:  $250,000.00
+OmniCare pays:  $25,000.00
+You pay:       $225,000.00 ($500.00 deductible + $224,500.00 above the $25,000.00 limit)
+```
+
+The deductible comes off the loss first and the limit then caps what the insurer
+pays - `insurer = min(claimed - deductible, limit)`. That ordering is what lets
+"covered up to $25,000" be taken at face value. Capping first and subtracting
+the deductible afterwards pays out $24,500 against a policy that says $25,000,
+which is not what the document says.
+
+Two properties hold by construction rather than by care. The shares **always sum
+to the claim** - `policyholder_pays` is derived by subtraction, so it cannot
+drift from the total - and where the policy states nothing for a claim type, no
+split is offered at all rather than one being invented. `estimate_claim_payment`
+returns `no_policy_terms` and the assistant says so.
+
+The breakdown goes into the **confirmation prompt**, not the answer afterwards.
+Agreeing to file a $250,000 claim means something quite different once you can
+see that $225,000 of it lands on you, and a number that arrives after consent
+arrived too late to be consent. `EV-48` asserts it against the interrupt payload
+specifically, for that reason - an earlier version of that case checked the
+answer text and passed on an answer that stated the split too late.
+
+One thing the screenshot also shows: chips carry a real status. "ok" used to
+mean "the tool returned", so a declined call showed a green chip that reads as
+*filed*.
 
 ---
 
@@ -310,6 +350,64 @@ a duplicate insurance claim.
 
 The claims file is unchanged. `tests/e2e/test_stack.py::test_declining_writes_nothing`
 asserts this against the live stack.
+
+---
+
+## 10. What each side pays
+
+![The payment split, computed in code](images/14-payment-split.png)
+
+The question a policyholder actually asks is not "what is the limit" but "what
+do I get". On a $35,000 burst pipe against a section covering $25,000 with a
+$500 deductible:
+
+```
+OmniCare pays  $25,000.00
+You pay        $10,000.00   ($500.00 deductible + $9,500.00 above the limit)
+```
+
+**The model does not do this arithmetic.** `estimate_claim_payment` parses the
+limit and the deductible out of the policy document and `settle()` computes the
+split in code — `insurer = min(claimed − deductible, limit)`, with the
+policyholder's share derived by subtraction so the two can never fail to sum to
+the claim. Editing `sample_policy.md` changes the answer; nothing in the code
+knows what the figures are.
+
+The ordering is load-bearing. Capping first and subtracting the deductible
+afterwards pays out $24,500 against a policy that says $25,000, which is not
+what the document says.
+
+Two things in that screenshot were bugs found by running it:
+
+- **"Grounded in your policy"** is computed, not claimed. Asking the model for
+  a confidence number was tried and reverted — told to wrap its reply in a JSON
+  envelope, a 7B began emitting tool calls as text and answering jewellery
+  questions with the water-damage section. The band now comes from evidence the
+  system can check: was anything retrieved to support a claim about the policy,
+  and did `ground` have to remove part of the answer. A model that volunteers a
+  *lower* number is believed; a higher one is not.
+- **The citation reads `(sample_policy.md § Section 1)`** — an abbreviation of
+  the full heading. That matched no retrieved citation exactly, so it was
+  deleted as invented, and the confidence was then capped *because* something
+  had been deleted: a correct citation punished twice for being terse. An
+  abbreviation that identifies exactly one retrieved section is now accepted.
+  "§ Section" matches both and so names neither; "§ Section 3" is a prefix of
+  nothing.
+
+### Saying "it does not say"
+
+![An answer with nothing retrieved behind it](images/15-low-confidence.png)
+
+The policy covers water damage and personal property. Asked about life
+insurance, the assistant says so rather than reaching for what insurance
+policies usually contain.
+
+This one is worth reading closely, because an earlier version of it was the
+worst failure in the project. Asked what else the policy covered, the assistant
+once replied "Fire Damage, Personal Property, Liability, Auto, Medical" — four
+of those five lifted from the `ClaimType` enum in `submit_claim`'s own schema,
+read as a list of cover. A tool schema is prompt text, and a model copies what
+it is shown. `ClaimType` now names only what the policy actually pays for.
 
 ---
 

@@ -36,6 +36,15 @@ class AgentState(TypedDict, total=False):
 
     # --- outputs, written by `ground` ---
     sources: list[str]
+
+    # What the model claimed about its own answer, and what the system was
+    # willing to stand behind. Kept apart deliberately: a model reporting 0.95
+    # on an answer with no retrieval behind it is the case worth seeing, and
+    # storing only the final number would hide exactly that.
+    answer_confidence: float | None
+    model_confidence: float | None
+    answer_unknown: bool
+    confidence_reason: str | None
     tool_invocations: list[dict[str, Any]]
 
     # --- control ---
@@ -43,6 +52,11 @@ class AgentState(TypedDict, total=False):
     guard_rule: str | None
     guard_flagged: bool
     pending_write: dict[str, Any] | None
+    # The payment split for the write awaiting confirmation, computed by
+    # `capture` from the policy document. Shown to the policyholder in the
+    # confirmation prompt: agreeing to file a $35,000 claim means something
+    # different once you can see that $10,000 of it lands on you.
+    pending_settlement: dict[str, Any] | None
     confirmation_tier: Literal[0, 1, 2]
     iterations: int
     stopped_reason: str | None

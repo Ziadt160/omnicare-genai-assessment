@@ -34,8 +34,13 @@ class RetrievalClient:
             response.raise_for_status()
             return [Chunk.model_validate(c) for c in response.json()["chunks"]]
 
-    async def sections(self) -> list[tuple[str, str]]:
-        """Every section of the policy, as ``(title, text)``.
+    async def sections(self) -> list[tuple[str, str, str]]:
+        """Every section of the policy, as ``(title, text, source_file)``.
+
+        The source file was being dropped here, and the cost only showed up
+        once a settlement had to carry a citation: the endpoint has always
+        returned it, so an answer grounded in Section 1 was arriving with no
+        way to name Section 1 and the UI showed no citation at all.
 
         Fetched rather than searched: a coverage cap has to come from the
         section that governs the claim, and search answers a different question.
@@ -51,7 +56,8 @@ class RetrievalClient:
                     response = await client.get(f"{self.base_url}/api/v1/sections")
                     response.raise_for_status()
                     self._sections = [
-                        (s["section_title"], s["text"]) for s in response.json()
+                        (s["section_title"], s["text"], s.get("source_file", ""))
+                        for s in response.json()
                     ]
             except Exception:
                 return []
