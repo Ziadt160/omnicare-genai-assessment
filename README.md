@@ -24,47 +24,39 @@ looks up existing claims, and files new ones — never without confirming first.
 ## Architecture
 
 ```mermaid
-flowchart TB
-  BROWSER["browser<br/>chat + voice orb"]
-  GW["gateway<br/>REST + WebSocket · rate limits · voice tokens"]
-  LK["livekit-server<br/>WebRTC SFU"]
-  VO["voice-agent<br/>VAD · STT · TTS · barge-in"]
-  Q{{"redis<br/>jobs:chat stream · consumer group"}}
-  W1["agent worker 1"]
-  W2["agent worker 2"]
-  WN["agent worker N"]
-  RE["retrieval<br/>bge-small + BM25 · RRF fusion"]
-  LLM["LLM provider — swappable<br/>Groq · Ollama · keyless demo"]
-  PG[("postgres<br/>conversations · messages · checkpoints")]
-  PX["phoenix<br/>OTLP traces"]
-
-  BROWSER -- "HTTP / WS" --> GW
-  BROWSER -- "WebRTC audio" --> LK
-  LK --> VO
-  GW -- "XADD jobs:chat" --> Q
-  VO -- "XADD jobs:chat" --> Q
-  Q -- "XREADGROUP — one job, one worker" --> W1
-  Q --> W2
-  Q --> WN
-  W1 -- "XADD stream:{run} — tokens, sources, done" --> Q
+flowchart LR
+  B([browser]) -- "chat" --> GW["gateway"]
+  B -- "voice" --> LK["livekit"] --> VO["voice agent"]
+  GW --> Q
+  VO --> Q
+  Q{{"redis<br/>job queue"}}
+  Q -- "one job, one worker" --> AG["agent  x N<br/>LangGraph"]
+  AG -- "tokens · sources · done" --> Q
   Q -. "streamed back" .-> GW
-  W1 --> RE
-  W1 --> LLM
-  W1 -- "checkpoint after every node" --> PG
-  GW --> PG
-  W1 -.-> PX
+  AG --> RE["retrieval<br/>BM25 + embeddings"]
+  AG --> LLM["LLM<br/>Groq or Ollama"]
+  AG --> PG[("postgres<br/>history + checkpoints")]
 
   classDef svc fill:#eef2f7,stroke:#64748b,color:#0f172a
   classDef core fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#3b0764
   classDef swap fill:#d1fae5,stroke:#047857,stroke-width:2px,color:#064e3b
   classDef queue fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#78350f
   classDef store fill:#f5f5f4,stroke:#a8a29e,color:#292524
-  class BROWSER,GW,LK,VO,RE svc
-  class W1,W2,WN core
+  class B,GW,LK,VO,RE svc
+  class AG core
   class LLM swap
   class Q queue
-  class PG,PX store
+  class PG store
 ```
+
+**One job, one worker.** The gateway drops a turn on a Redis stream and the
+agent replicas read it as a consumer group, so adding a container adds
+throughput and a crashed one has its job reclaimed. Answers stream back the
+same way. Every step checkpoints to Postgres, which is what lets a
+confirmation pause on one worker and resume on another.
+
+Voice is the same agent, not a second one: the voice worker is ears and a
+mouth, and puts its turn on the same queue.
 
 One job, one worker: the gateway `XADD`s the turn onto a Redis stream and the
 agent replicas read it as a **consumer group**, so adding a container adds
@@ -99,45 +91,50 @@ was safe, whether a write may proceed, whether a citation was real, or what a
 claim pays.
 
 ```mermaid
-flowchart TB
-  START([START]) --> GUARD
-  GUARD["guard<br/>injection screen, before any token is spent"]
-  AGENT["agent<br/>the only LLM call"]
-  TOOLS["tools<br/>execute · Pydantic-validate · record"]
-  CONFIRM["confirm<br/>interrupt() — pauses and shows the payment split"]
-  POST["ground + format<br/>strip invented citations and values, shape per channel"]
-  OUT(["structured response<br/>answer · sources · tool_calls · confidence"])
-  BOX["tools bound to the model<br/>search_policy_documents — hybrid RAG, returns citations<br/>estimate_claim_payment — payment split, computed in code<br/>get_claim_status — reads mock_claims.json<br/>submit_claim — the only write path"]
+flowchart LR
+  IN([user turn]) --> G
+  G["guard"]
+  M["agent<br/>the LLM, with 4 tools"]
+  T["tools"]
+  C["confirm"]
+  V["verify + format"]
+  OUT([answer · citations · confidence])
 
-  GUARD -- ok --> AGENT
-  AGENT -- "read tool_calls" --> TOOLS
-  TOOLS -- "results appended to messages" --> AGENT
-  AGENT -- "write tool_calls" --> CONFIRM
-  CONFIRM -- approved --> TOOLS
-  AGENT -- "no tool_calls: final answer" --> POST
-  CONFIRM -- "declined: nothing written" --> POST
-  GUARD -. "blocked: canned refusal, no LLM call" .-> POST
-  POST --> OUT
-  AGENT -.- BOX
+  G -- safe --> M
+  M -- "calls a tool" --> T
+  T -- result --> M
+  M -- "wants to file a claim" --> C
+  C -- yes --> T
+  M -- done --> V
+  C -- no --> V
+  G -. blocked .-> V
+  V --> OUT
 
-  classDef node fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#3b0764
+  classDef det fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#3b0764
+  classDef llm fill:#d1fae5,stroke:#047857,stroke-width:3px,color:#064e3b
   classDef term fill:#efece4,stroke:#a8a29e,color:#292524
-  classDef tool fill:#d1fae5,stroke:#047857,stroke-width:2px,color:#064e3b
-  class GUARD,AGENT,TOOLS,CONFIRM,POST node
-  class START,OUT term
-  class BOX tool
+  class G,T,C,V det
+  class M llm
+  class IN,OUT term
   linkStyle 8 stroke:#b91c1c,color:#b91c1c
 ```
 
-Green is where the model is — the `agent` node and the four tools bound to it.
-Purple is deterministic Python: `guard` and `confirm` can each stop the turn,
-and `ground` runs on every exit, so an answer is verified whether it came from
-a tool call, a refusal or a declined write.
+Green is the one step that calls the model. Everything purple is ordinary
+Python, and that is the whole design: the model picks tools, it never
+decides whether the input was safe, whether a claim may be filed, or
+whether a citation was real.
 
-Green is where the model is. Purple is deterministic Python. Amber is a gate
-that can stop the turn — `guard` before a token is spent, `confirm` before an
-irreversible write. Every exit runs `parse → ground → format`, including a
-blocked one, so the response shape is identical however the turn ended.
+| The model's tools | What it does |
+|---|---|
+| `search_policy_documents` | Hybrid BM25 + embedding search. Returns sections with citations. |
+| `estimate_claim_payment` | What OmniCare pays and what you pay — arithmetic in code, from the policy's own figures. |
+| `get_claim_status` | Looks up a filed claim; suggests the closest real ID if it misses. |
+| `submit_claim` | The only write path in the system. Always goes through `confirm`. |
+
+That diagram simplifies: **"verify + format" is four nodes**, and they run on
+every exit — a tool call, a refusal, a declined write — so the response has the
+same shape however the turn ended. The full set, and what each one decides
+without asking the model:
 
 | Node | LLM? | Decides |
 |---|---|---|
@@ -202,24 +199,22 @@ make up-obs      # adds Phoenix tracing on :6006
 
 ## Walkthrough
 
-**[`docs/walkthrough.md`](docs/walkthrough.md)** — the full run, with
-screenshots of every state and the reasoning behind each fix. Not a summary of
-this README: it is what a reviewer sees on screen, including the things that
-went wrong and what changed because of them.
+**[`docs/walkthrough.md`](docs/walkthrough.md)** — the whole product, screen by
+screen. Every screenshot is generated by `scripts/capture_walkthrough.py`
+driving the real UI against the running stack, so a re-run moves the pictures
+with the code instead of letting them go stale.
 
-| | Scenario | |
-|---|---|---|
-| 1 | [The chat surface](docs/walkthrough.md#1-the-chat-surface) | 6 | [Prompt injection is refused](docs/walkthrough.md#6-prompt-injection-is-refused) |
-| 2 | [A coverage question, with a citation](docs/walkthrough.md#2-a-coverage-question-answered-with-a-citation) | 7 | [Filing a claim pauses first](docs/walkthrough.md#7-filing-a-claim-pauses-first) |
-| 3 | [An exclusion, stated plainly](docs/walkthrough.md#3-an-exclusion-stated-plainly) | 8 | [Confirmed, and filed](docs/walkthrough.md#8-confirmed-and-filed) |
-| 4 | [Claim status via a backend tool](docs/walkthrough.md#4-claim-status-through-a-backend-tool) | 9 | [Declining writes nothing](docs/walkthrough.md#9-declining-writes-nothing) |
-| 5 | [An unknown claim recovers](docs/walkthrough.md#5-an-unknown-claim-recovers-instead-of-dead-ending) | 10 | [What each side pays](docs/walkthrough.md#10-what-each-side-pays) |
-
-Plus [voice end to end](docs/walkthrough.md#voice-end-to-end) — the orb, the
-listening/working/speaking states and barge-in — the
-[WebRTC gate](docs/walkthrough.md#voice-the-webrtc-gate),
-[scaling across four replicas](docs/walkthrough.md#scaling) and
-[tracing](docs/walkthrough.md#observability).
+| | Scenario | | |
+|---|---|---|---|
+| 1 | [The chat surface](docs/walkthrough.md#1-the-chat-surface) | 10 | [Above the limit — the split, before you agree](docs/walkthrough.md#10-above-the-limit-the-split-before-you-agree) |
+| 2 | [A coverage question, with a citation](docs/walkthrough.md#2-a-coverage-question-answered-with-a-citation) | 11 | [Confirmed, and filed](docs/walkthrough.md#11-confirmed-and-filed) |
+| 3 | [An exclusion, stated plainly](docs/walkthrough.md#3-an-exclusion-stated-plainly) | 12 | [Declining writes nothing](docs/walkthrough.md#12-declining-writes-nothing) |
+| 4 | [What each side pays](docs/walkthrough.md#4-what-each-side-pays) | 13 | [Voice: the orb and its states](docs/walkthrough.md#13-voice-the-same-agent-not-a-second-one) |
+| 5 | [When the policy does not say](docs/walkthrough.md#5-when-the-policy-does-not-say) | 14 | [Voice: the WebRTC gate](docs/walkthrough.md#14-voice-the-webrtc-gate) |
+| 6 | [Claim status via a backend tool](docs/walkthrough.md#6-claim-status-through-a-backend-tool) | 15 | [Scaling across four replicas](docs/walkthrough.md#15-scaling) |
+| 7 | [An unknown claim recovers](docs/walkthrough.md#7-an-unknown-claim-recovers-instead-of-dead-ending) | 16 | [Tracing](docs/walkthrough.md#16-observability) |
+| 8 | [Prompt injection is refused](docs/walkthrough.md#8-prompt-injection-is-refused) | 17 | [What the tests cover](docs/walkthrough.md#17-what-the-tests-cover) |
+| 9 | [Filing a claim pauses first](docs/walkthrough.md#9-filing-a-claim-pauses-first) | | |
 
 ---
 
@@ -432,7 +427,7 @@ once will make the first requests time out.
 
 **The LiveKit WebRTC gate passed:** `ICE CONNECTED over udp / prflx`. The spike
 publishes a synthetic 440 Hz tone instead of a microphone track, so it runs
-headlessly. See the [walkthrough](docs/walkthrough.md#voice-the-webrtc-gate).
+headlessly. See the [walkthrough](docs/walkthrough.md#14-voice-the-webrtc-gate).
 
 **Against real models — `make eval-live`:**
 
@@ -744,7 +739,7 @@ closed, full screen, or running while the caller reads the chat. Minimising
 stops the drawing and keeps the audio graph, and the pill above the composer is
 how you return. And the caller is given **1.8 s** to finish rather than the
 library's 0.5 s, because someone reading a claim number off a letter pauses
-mid-identifier. See [the walkthrough](docs/walkthrough.md#voice-what-a-call-looks-like).
+mid-identifier. See [the walkthrough](docs/walkthrough.md#13-voice-the-same-agent-not-a-second-one).
 
 **Still not verified:**
 

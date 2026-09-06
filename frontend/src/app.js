@@ -210,7 +210,14 @@ function renderText(raw) {
   const escaped = escapeHtml(raw)
     // Citation markers some models emit around references, left dangling when
     // the reference itself was stripped.
-    .replace(/[【】「」]/g, "")
+    // Replaced with a space, not deleted. gpt-oss-120b writes the citation as
+    // "…are excluded.【sample_policy.md § Section 1…】" with no space before the
+    // marker, so deleting it welded the sentence to the citation:
+    // "excluded).sample_policy.md". The doubled spaces this can leave are
+    // collapsed on the next line, and the rule further down removes a space
+    // left sitting before punctuation.
+    .replace(/[【】「」]/g, " ")
+    .replace(/[ \t]{2,}/g, " ")
     // A fence around the whole answer is the model formatting prose as code.
     .replace(/^\s*```[a-z0-9_+-]*\s*\n?|\n?```\s*$/gi, "");
 

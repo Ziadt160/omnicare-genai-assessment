@@ -133,6 +133,23 @@ async def main() -> int:
         await page.wait_for_timeout(1_200)
         await shot("09-declined.png", "Declining writes nothing")
 
+        # A claim above what the policy covers. It used to be refused outright;
+        # it is a real claim that is partly uncovered, so it is filed once the
+        # policyholder has seen what each side pays. Captured at the pause,
+        # which is the only moment the split can still change their mind.
+        await fresh(page)
+        await send(
+            page,
+            "File a water damage claim on POL-1092 for $40,000 - a pipe burst "
+            "and flooded the kitchen.",
+        )
+        await page.wait_for_selector("#confirm:not([hidden])", timeout=180_000)
+        await page.wait_for_timeout(800)
+        await shot(
+            "13-over-limit.png",
+            "Above the policy limit: the split, shown before you agree",
+        )
+
         # The payment split and the confidence band. Captured as two separate
         # threads rather than one, for the reason in `fresh`: the second answer
         # would otherwise push the first out of the viewport.
