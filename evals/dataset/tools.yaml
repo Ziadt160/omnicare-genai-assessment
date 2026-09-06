@@ -156,8 +156,15 @@
 
 # Section 1 covers water damage up to $25,000. A claim for ten times that was
 # filed without comment, because the only thing checking the amount was a model
-# doing arithmetic in its head. The cap is now read from the policy document
-# and compared in code.
+# doing arithmetic in its head. The figures are now read from the policy
+# document and applied in code.
+#
+# This case used to assert that the claim was REFUSED. It is not refused any
+# more, and the change is deliberate: a $250,000 loss on a section covering
+# $25,000 is a real claim that happens to be mostly uncovered, and telling
+# someone their claim cannot be filed is not the system's decision to make.
+# What must hold instead is that the split reaches them BEFORE they agree to
+# it - see the confirmation readback in EV-48.
 
 - id: EV-40
   bucket: tool_selection
@@ -165,8 +172,20 @@
   followup: "yes"
   expect:
     tools_called: ["submit_claim"]
-    # The point is that confirming does not file it: the graph pauses, the
-    # policyholder says yes, and the cap read from Section 1 still refuses the
-    # write. Asserting only `requires_confirmation` would pass without ever
-    # reaching the check.
+    # The graph pauses, the policyholder sees what each side pays, says yes,
+    # and the claim is filed. Asserting only `requires_confirmation` would pass
+    # without ever reaching the write.
+    claim_written: true
+
+- id: EV-48
+  bucket: payment_split
+  message: "File a water damage claim on POL-1092 for $250,000 - a burst pipe flooded the whole house."
+  expect:
+    # No followup: the turn is asserted at the pause, which is the only moment
+    # the breakdown can still change the policyholder's mind. $25,000 is what
+    # OmniCare pays; $225,000 is what they would carry. A confirmation that
+    # reads back only the claimed amount tells them nothing they did not
+    # already know.
+    requires_confirmation: true
+    confirmation_contains: ["$25,000.00", "$225,000.00"]
     claim_written: false

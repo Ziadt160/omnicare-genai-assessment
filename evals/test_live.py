@@ -124,6 +124,9 @@ def run_live(client: httpx.Client, case: EvalCase) -> tuple[Outcome, float]:
             and not calls
         ),
         awaiting_confirmation=awaiting,
+        # A paused turn returns its readback as the response body - the same
+        # string the confirm panel renders. See frontend/src/app.js.
+        confirmation_readback=body.get("response", "") if awaiting else "",
         claim_written=any(
             t["name"] == "submit_claim" and t.get("status") == "ok" for t in calls
         ),

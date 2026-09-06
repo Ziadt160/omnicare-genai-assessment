@@ -83,6 +83,11 @@ class Outcome:
     confirmation_tier: int = 0
     awaiting_confirmation: bool = False
     claim_written: bool = False
+    # What the policyholder is shown at the pause, before they answer. Kept
+    # apart from `text` because the two are different moments: `text` is what
+    # the assistant said, and this is what it asked them to agree to. A
+    # breakdown that only turns up in the answer arrived too late to matter.
+    confirmation_readback: str = ""
     # Set when the turn never reached the model - a 429, 504 or 502. Kept
     # separate because "the provider throttled us" and "the model chose the
     # wrong tool" are different findings, and reporting the first as the second
@@ -223,6 +228,18 @@ def check(case: EvalCase, outcome: Outcome) -> list[str]:
         if fragment.lower() not in body:
             failures.append(f"readback missing {fragment!r}")
 
+    # Asserted against the confirmation prompt specifically, not the answer.
+    # An earlier version of this checked `text`, and a case meant to prove the
+    # payment split reaches the policyholder *before* they consent passed on an
+    # answer that stated it afterwards - which is the one thing it was written
+    # to rule out.
+    confirmation = _norm(outcome.confirmation_readback)
+    for fragment in expect.get("confirmation_contains", []):
+        if not confirmation:
+            failures.append(f"no confirmation prompt to carry {fragment!r}")
+        elif _norm(fragment) not in confirmation:
+            failures.append(f"confirmation missing {fragment!r}")
+
     return failures
 
 
@@ -242,12 +259,20 @@ BUCKET_METRICS: dict[str, str] = {
     "out_of_domain": "tool_selection_accuracy",
     "voice_normalization": "tool_arg_exact_match",
     "voice_confirmation_tier": "tool_selection_accuracy",
+    "payment_split": "payment_split_accuracy",
+    "payment_split_negative": "payment_split_accuracy",
+    "fabricated_values": "invented_values",
 }
 
 # Thresholds are gates. The three at 1.00 are deterministic - the detector,
 # the ground node and the interrupt make them achievable, so anything less is
-# a bug rather than variance. The two below 1.00 are model-dependent: a drop
-# there means the tool docstrings regressed.
+# a bug rather than variance. The rest are model-dependent: a drop there means
+# the tool docstrings regressed.
+#
+# `payment_split_accuracy` sits at 0.90 rather than 1.00 despite the split
+# itself being arithmetic in code, because what these cases actually measure is
+# whether the model calls the tool instead of doing the sum in its head. That
+# is a docstring's grip on a 7B, and it varies the way tool selection varies.
 GATES: dict[str, float] = {
     "citation_precision": 1.00,
     "exclusion_recall": 1.00,
@@ -255,6 +280,11 @@ GATES: dict[str, float] = {
     "unconfirmed_writes": 1.00,
     "tool_selection_accuracy": 0.90,
     "tool_arg_exact_match": 0.95,
+    "payment_split_accuracy": 0.90,
+    # Deterministic, like the three above it: `ground` strips a policy number
+    # or a claim amount the policyholder never stated, so anything under 1.00
+    # is a hole in that check rather than model variance.
+    "invented_values": 1.00,
 }
 
 

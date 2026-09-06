@@ -133,6 +133,24 @@ async def main() -> int:
         await page.wait_for_timeout(1_200)
         await shot("09-declined.png", "Declining writes nothing")
 
+        # The payment split and the confidence band. Captured as two separate
+        # threads rather than one, for the reason in `fresh`: the second answer
+        # would otherwise push the first out of the viewport.
+        await fresh(page)
+        await send(
+            page,
+            "A pipe burst and the repair quote is $35,000. How much will you "
+            "pay and how much will I pay?",
+        )
+        await shot("14-payment-split.png", "What each side pays, computed in code")
+
+        await fresh(page)
+        await send(page, "What is my life insurance payout?")
+        await shot(
+            "15-low-confidence.png",
+            "An answer with nothing retrieved behind it, marked as such",
+        )
+
         await browser.close()
 
     for name, caption in shots:
