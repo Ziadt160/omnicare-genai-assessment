@@ -25,38 +25,53 @@ looks up existing claims, and files new ones — never without confirming first.
 
 ```mermaid
 flowchart TB
-  UI["<b>frontend</b> · nginx:alpine<br/>static HTML/JS + livekit-client"]
-  GW["<b>gateway</b><br/>REST + WS · voice tokens<br/>conversations · ingress limits"]
-  LK["<b>livekit-server</b><br/>SFU 7880/81/82"]
-  VO["<b>voice-agent</b><br/>Silero VAD · STT · TTS · barge-in"]
-  AG["<b>agent</b> ×N<br/>LangGraph · 4 tools<br/>ClaimsRepository → mock_claims.json"]
-  RE["<b>retrieval</b><br/>FastEmbed bge-small + BM25 · RRF"]
-  LLM["<b>LLM provider</b> — swappable<br/>Groq (online) · Ollama (local) · keyless demo"]
-  PG[("<b>postgres</b><br/>conversations · messages · langgraph.ckpt")]
-  RD[("<b>redis</b><br/>jobs:chat · stream:{run} · limits · idempotency")]
-  PX["<b>phoenix</b><br/>OTLP traces · profile: obs"]
+  BROWSER["browser<br/>chat + voice orb"]
+  GW["gateway<br/>REST + WebSocket · rate limits · voice tokens"]
+  LK["livekit-server<br/>WebRTC SFU"]
+  VO["voice-agent<br/>VAD · STT · TTS · barge-in"]
+  Q{{"redis<br/>jobs:chat stream · consumer group"}}
+  W1["agent worker 1"]
+  W2["agent worker 2"]
+  WN["agent worker N"]
+  RE["retrieval<br/>bge-small + BM25 · RRF fusion"]
+  LLM["LLM provider — swappable<br/>Groq · Ollama · keyless demo"]
+  PG[("postgres<br/>conversations · messages · checkpoints")]
+  PX["phoenix<br/>OTLP traces"]
 
-  UI -- "HTTP / WS" --> GW
-  UI -- "WebRTC" --> LK
+  BROWSER -- "HTTP / WS" --> GW
+  BROWSER -- "WebRTC audio" --> LK
   LK --> VO
-  GW -- "XADD jobs:chat" --> RD
-  VO -- "XADD jobs:chat" --> RD
-  RD --> AG
-  AG --> RE
-  AG -- "chat completions" --> LLM
+  GW -- "XADD jobs:chat" --> Q
+  VO -- "XADD jobs:chat" --> Q
+  Q -- "XREADGROUP — one job, one worker" --> W1
+  Q --> W2
+  Q --> WN
+  W1 -- "XADD stream:{run} — tokens, sources, done" --> Q
+  Q -. "streamed back" .-> GW
+  W1 --> RE
+  W1 --> LLM
+  W1 -- "checkpoint after every node" --> PG
   GW --> PG
-  AG --> PG
-  AG -.-> PX
+  W1 -.-> PX
 
   classDef svc fill:#eef2f7,stroke:#64748b,color:#0f172a
   classDef core fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#3b0764
   classDef swap fill:#d1fae5,stroke:#047857,stroke-width:2px,color:#064e3b
+  classDef queue fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#78350f
   classDef store fill:#f5f5f4,stroke:#a8a29e,color:#292524
-  class UI,GW,LK,VO,RE svc
-  class AG core
+  class BROWSER,GW,LK,VO,RE svc
+  class W1,W2,WN core
   class LLM swap
-  class PG,RD,PX store
+  class Q queue
+  class PG,PX store
 ```
+
+One job, one worker: the gateway `XADD`s the turn onto a Redis stream and the
+agent replicas read it as a **consumer group**, so adding a container adds
+throughput and a crashed one has its job reclaimed. Events stream back the same
+way, which is what makes the browser see tokens as they are produced. Every
+graph node checkpoints to Postgres, so a confirmation can pause on one worker
+and resume on another.
 
 Embeddings run locally in every mode, so switching provider cannot silently
 change retrieval results.
@@ -85,39 +100,39 @@ claim pays.
 
 ```mermaid
 flowchart TB
-  IN(["turn"]) --> GUARD
-  GUARD{{"<b>guard</b> — injection screen"}}
-  AGENT["<b>agent</b><br/>THE ONLY LLM CALL<br/><i>stale tool output elided</i>"]
-  TOOLS["<b>tools</b><br/>execute · record · harvest chunks"]
-  CAPTURE["<b>capture</b><br/>payment split, from the policy"]
-  CONFIRM{{"<b>confirm</b><br/>interrupt() before any write"}}
-  READBACK["<b>readback</b> — phonetic echo, voice"]
-  PARSE["<b>parse</b> — unwrap the envelope"]
-  GROUND["<b>ground</b><br/>strip invented citations & values"]
-  FORMAT["<b>format</b> — shape per channel"]
-  OUT(["answer"])
+  START([START]) --> GUARD
+  GUARD["guard<br/>injection screen, before any token is spent"]
+  AGENT["agent<br/>the only LLM call"]
+  TOOLS["tools<br/>execute · Pydantic-validate · record"]
+  CONFIRM["confirm<br/>interrupt() — pauses and shows the payment split"]
+  POST["ground + format<br/>strip invented citations and values, shape per channel"]
+  OUT(["structured response<br/>answer · sources · tool_calls · confidence"])
+  BOX["tools bound to the model<br/>search_policy_documents — hybrid RAG, returns citations<br/>estimate_claim_payment — payment split, computed in code<br/>get_claim_status — reads mock_claims.json<br/>submit_claim — the only write path"]
 
-  GUARD -- "ok" --> AGENT
-  AGENT -- "read tool" --> TOOLS
-  AGENT -- "write tool" --> CAPTURE
-  TOOLS --> AGENT
-  CAPTURE --> CONFIRM
-  CONFIRM -- "approved" --> TOOLS
-  AGENT -- "no tool call" --> READBACK
-  READBACK --> PARSE
-  GUARD -- "blocked" --> PARSE
-  CONFIRM -- "declined" --> PARSE
-  PARSE --> GROUND --> FORMAT --> OUT
+  GUARD -- ok --> AGENT
+  AGENT -- "read tool_calls" --> TOOLS
+  TOOLS -- "results appended to messages" --> AGENT
+  AGENT -- "write tool_calls" --> CONFIRM
+  CONFIRM -- approved --> TOOLS
+  AGENT -- "no tool_calls: final answer" --> POST
+  CONFIRM -- "declined: nothing written" --> POST
+  GUARD -. "blocked: canned refusal, no LLM call" .-> POST
+  POST --> OUT
+  AGENT -.- BOX
 
-  classDef llm fill:#d1fae5,stroke:#047857,stroke-width:3px,color:#064e3b
-  classDef det fill:#ede9fe,stroke:#6d28d9,color:#3b0764
-  classDef gate fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#78350f
-  classDef term fill:#f5f5f4,stroke:#a8a29e,color:#292524
-  class AGENT llm
-  class TOOLS,CAPTURE,READBACK,PARSE,GROUND,FORMAT det
-  class GUARD,CONFIRM gate
-  class IN,OUT term
+  classDef node fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#3b0764
+  classDef term fill:#efece4,stroke:#a8a29e,color:#292524
+  classDef tool fill:#d1fae5,stroke:#047857,stroke-width:2px,color:#064e3b
+  class GUARD,AGENT,TOOLS,CONFIRM,POST node
+  class START,OUT term
+  class BOX tool
+  linkStyle 8 stroke:#b91c1c,color:#b91c1c
 ```
+
+Green is where the model is — the `agent` node and the four tools bound to it.
+Purple is deterministic Python: `guard` and `confirm` can each stop the turn,
+and `ground` runs on every exit, so an answer is verified whether it came from
+a tool call, a refusal or a declined write.
 
 Green is where the model is. Purple is deterministic Python. Amber is a gate
 that can stop the turn — `guard` before a token is spent, `confirm` before an
