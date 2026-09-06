@@ -23,46 +23,43 @@ looks up existing claims, and files new ones — never without confirming first.
 
 ## Architecture
 
+```mermaid
+flowchart TB
+  UI["<b>frontend</b> · nginx:alpine<br/>static HTML/JS + livekit-client"]
+  GW["<b>gateway</b><br/>REST + WS · voice tokens<br/>conversations · ingress limits"]
+  LK["<b>livekit-server</b><br/>SFU 7880/81/82"]
+  VO["<b>voice-agent</b><br/>Silero VAD · STT · TTS · barge-in"]
+  AG["<b>agent</b> ×N<br/>LangGraph · 4 tools<br/>ClaimsRepository → mock_claims.json"]
+  RE["<b>retrieval</b><br/>FastEmbed bge-small + BM25 · RRF"]
+  LLM["<b>LLM provider</b> — swappable<br/>Groq (online) · Ollama (local) · keyless demo"]
+  PG[("<b>postgres</b><br/>conversations · messages · langgraph.ckpt")]
+  RD[("<b>redis</b><br/>jobs:chat · stream:{run} · limits · idempotency")]
+  PX["<b>phoenix</b><br/>OTLP traces · profile: obs"]
+
+  UI -- "HTTP / WS" --> GW
+  UI -- "WebRTC" --> LK
+  LK --> VO
+  GW -- "XADD jobs:chat" --> RD
+  VO -- "XADD jobs:chat" --> RD
+  RD --> AG
+  AG --> RE
+  AG -- "chat completions" --> LLM
+  GW --> PG
+  AG --> PG
+  AG -.-> PX
+
+  classDef svc fill:#eef2f7,stroke:#64748b,color:#0f172a
+  classDef core fill:#ede9fe,stroke:#6d28d9,stroke-width:2px,color:#3b0764
+  classDef swap fill:#d1fae5,stroke:#047857,stroke-width:2px,color:#064e3b
+  classDef store fill:#f5f5f4,stroke:#a8a29e,color:#292524
+  class UI,GW,LK,VO,RE svc
+  class AG core
+  class LLM swap
+  class PG,RD,PX store
 ```
-                          ┌────────────────────────────────┐
-                          │  frontend · nginx:alpine       │
-                          │  static HTML/JS + livekit-client│
-                          └────┬──────────────────────┬────┘
-                     HTTP / WS │                      │ WebRTC
-                               ▼                      ▼
-                    ┌──────────────────┐   ┌──────────────────────┐
-                    │     gateway      │   │   livekit-server     │
-                    │  REST + WS       │   │   SFU 7880/81/82     │
-                    │  voice tokens    │   └──────────┬───────────┘
-                    │  conversations   │              │
-                    │  ingress limits  │              ▼
-                    └────┬─────────┬───┘   ┌──────────────────────┐
-                         │         │       │     voice-agent      │
-                         │         │       │  Silero VAD · STT    │
-                         │         │       │  TTS · barge-in      │
-                         │         │       └──────────┬───────────┘
-                         │         │                  │
-                         │         └──────────────────┤
-                         │              XADD jobs:chat│
-                         │                            ▼
-                         │              ┌──────────────────────────┐
-                         │              │         agent  ×N        │
-                         │              │  LangGraph ReAct loop    │
-                         │              │  ├ search_policy_docs ───┼──► retrieval
-                         │              │  ├ estimate_claim_payment│    fastembed
-                         │              │  ├ get_claim_status      │    bge-small + BM25
-                         │              │  └ submit_claim          │    RRF fusion
-                         │              │     └ ClaimsRepository   │
-                         │              │        → mock_claims.json│
-                         │              └────┬──────────────┬──────┘
-                         │                   │              │
-              ┌──────────▼────────┐  ┌───────▼──────┐  ┌────▼──────────┐
-              │     postgres      │  │    redis     │  │  phoenix      │
-              │ conversations     │  │ jobs:chat    │  │  OTLP traces  │
-              │ messages          │  │ stream:{run} │  │  profile: obs │
-              │ langgraph.ckpt    │  │ limits · idem│  └───────────────┘
-              └───────────────────┘  └──────────────┘
-```
+
+Embeddings run locally in every mode, so switching provider cannot silently
+change retrieval results.
 
 Each boundary is justified by a **different** constraint — which is what
 separates a considered split from a distributed monolith:
@@ -86,31 +83,46 @@ is the whole design — the LLM chooses *tools*, it never decides whether input
 was safe, whether a write may proceed, whether a citation was real, or what a
 claim pays.
 
+```mermaid
+flowchart TB
+  IN(["turn"]) --> GUARD
+  GUARD{{"<b>guard</b> — injection screen"}}
+  AGENT["<b>agent</b><br/>THE ONLY LLM CALL<br/><i>stale tool output elided</i>"]
+  TOOLS["<b>tools</b><br/>execute · record · harvest chunks"]
+  CAPTURE["<b>capture</b><br/>payment split, from the policy"]
+  CONFIRM{{"<b>confirm</b><br/>interrupt() before any write"}}
+  READBACK["<b>readback</b> — phonetic echo, voice"]
+  PARSE["<b>parse</b> — unwrap the envelope"]
+  GROUND["<b>ground</b><br/>strip invented citations & values"]
+  FORMAT["<b>format</b> — shape per channel"]
+  OUT(["answer"])
+
+  GUARD -- "ok" --> AGENT
+  AGENT -- "read tool" --> TOOLS
+  AGENT -- "write tool" --> CAPTURE
+  TOOLS --> AGENT
+  CAPTURE --> CONFIRM
+  CONFIRM -- "approved" --> TOOLS
+  AGENT -- "no tool call" --> READBACK
+  READBACK --> PARSE
+  GUARD -- "blocked" --> PARSE
+  CONFIRM -- "declined" --> PARSE
+  PARSE --> GROUND --> FORMAT --> OUT
+
+  classDef llm fill:#d1fae5,stroke:#047857,stroke-width:3px,color:#064e3b
+  classDef det fill:#ede9fe,stroke:#6d28d9,color:#3b0764
+  classDef gate fill:#fef3c7,stroke:#b45309,stroke-width:2px,color:#78350f
+  classDef term fill:#f5f5f4,stroke:#a8a29e,color:#292524
+  class AGENT llm
+  class TOOLS,CAPTURE,READBACK,PARSE,GROUND,FORMAT det
+  class GUARD,CONFIRM gate
+  class IN,OUT term
 ```
-                    ┌───────── every turn enters here ─────────┐
-                    ▼                                          │
-  START ──►  guard ──────────────blocked──────────────────┐    │
-             │  injection screen · clears per-turn state  │    │
-             │ ok                                         │    │
-             ▼                                            │    │
-        ┌► agent ──────────no tool call───────► readback ─┤    │
-        │    │  THE ONLY LLM CALL              phonetic   │    │
-        │    │  (stale tool output elided)     read-back  │    │
-        │    ├──read tool──► tools ────────────┐          │    │
-        │    │               executes, records │          │    │
-        │    │               harvests chunks   │          │    │
-        │    └──write tool─► capture ──► confirm          │    │
-        │                    payment    interrupt()       │    │
-        │                    split      declined ─────────┤    │
-        │                               approved          │    │
-        └───────────────────────────────────┘             │    │
-                                                          ▼    │
-                                        parse ──► ground ──► format ──► END
-                                        unwrap    strip      JSON off,
-                                        envelope  invented   markdown
-                                                  citations  stripped
-                                                  & values   for voice
-```
+
+Green is where the model is. Purple is deterministic Python. Amber is a gate
+that can stop the turn — `guard` before a token is spent, `confirm` before an
+irreversible write. Every exit runs `parse → ground → format`, including a
+blocked one, so the response shape is identical however the turn ended.
 
 | Node | LLM? | Decides |
 |---|---|---|
