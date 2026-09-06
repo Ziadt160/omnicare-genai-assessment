@@ -297,7 +297,21 @@ def test_reading_back_through_history_is_not_interrupted(page) -> None:
 def test_reset_clears_the_thread_and_the_conversation(page) -> None:
     """A reset that only wipes the screen is worse than none: the agent keeps
     the thread, so the next message still lands in the old conversation and the
-    assistant answers with context the policyholder can no longer see."""
+    assistant answers with context the policyholder can no longer see.
+
+    This asserted that the id was *cleared*, which was the original
+    implementation and turned out not to achieve the thing the docstring
+    describes. A request carrying no conversation id does not start a new
+    conversation - `ConversationStore.ensure` deliberately resolves it to the
+    user's most recent one, so that the graded request schema, which has no
+    conversation_id field at all, can still hold a multi-turn thread. Clearing
+    the id therefore resolved straight back to the conversation being
+    abandoned, which is what a user reported.
+
+    So the new conversation is named by the client, and the identity is
+    replaced with it: history, claims and the rate limiter are all keyed on the
+    user, and keeping the old one leaves a route back into the cleared thread.
+    """
     page.evaluate(
         """() => {
             window.OmniCare.conversationId = 'cnv_previous';
@@ -307,6 +321,7 @@ def test_reset_clears_the_thread_and_the_conversation(page) -> None:
     )
     before = page.evaluate("() => document.querySelectorAll('.msg').length")
     assert before >= 3, "the greeting plus the two added messages"
+    user_before = page.evaluate("() => window.OmniCare.USER_ID")
 
     page.click("#reset")
     page.wait_for_timeout(250)
@@ -314,8 +329,14 @@ def test_reset_clears_the_thread_and_the_conversation(page) -> None:
     assert page.evaluate("() => document.querySelectorAll('.msg').length") == 1, (
         "only the opening greeting should remain"
     )
-    assert page.evaluate("() => window.OmniCare.conversationId") in (None, ""), (
-        "the next message must start a new conversation"
+
+    conversation = page.evaluate("() => window.OmniCare.conversationId")
+    assert conversation, "reset must name a new conversation, not clear the id"
+    assert conversation != "cnv_previous", (
+        "the next message must not land in the conversation just cleared"
+    )
+    assert page.evaluate("() => window.OmniCare.USER_ID") != user_before, (
+        "a new conversation is a new identity, or an id-less request resolves back"
     )
 
 
