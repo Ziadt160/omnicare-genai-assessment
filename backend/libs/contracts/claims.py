@@ -14,12 +14,29 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
+# The categories a claim can be filed under: exactly the sections the policy
+# document has, and that is the point.
+#
+# This list is prompt text. It reaches the model verbatim as `submit_claim`'s
+# schema, and while it also named "Liability", "Auto" and "Medical", a
+# policyholder asking what their policy covered was told it included "Fire
+# Damage, Personal Property, Liability, Auto, Medical". Four of those five came
+# straight from here. The model was not inventing from nowhere - it was reading
+# a list of filing categories as a list of cover, which is a fair reading of a
+# list it was shown and never told the purpose of.
+#
+# Narrowing it to what the policy actually pays for removes the reading rather
+# than arguing with it. A loss the policy does not cover is then not a claim
+# type to be mapped onto the nearest option - it is something to tell the
+# policyholder plainly, which `search_policy_documents` can do and this cannot.
+#
+# The cost is that this couples the contract to one policy document. Deriving
+# the list from the document's own sections is the right fix and a larger one;
+# until then, two names that match the policy are more honest than five that
+# mostly do not.
 ClaimType = Literal[
     "Water Damage",
     "Personal Property",
-    "Liability",
-    "Auto",
-    "Medical",
 ]
 ClaimStatus = Literal["Submitted", "Under Review", "Approved", "Denied"]
 
@@ -30,7 +47,7 @@ CLAIM_ID_PATTERN = r"^CLM-\d{4}$"
 class GetClaimStatusArgs(BaseModel):
     """Tool arguments for ``get_claim_status``. This *is* the LLM's JSON schema."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     claim_id: str = Field(
         pattern=CLAIM_ID_PATTERN,
@@ -42,6 +59,41 @@ class GetClaimStatusArgs(BaseModel):
     )
 
 
+class EstimateClaimPaymentArgs(BaseModel):
+    """Tool arguments for ``estimate_claim_payment``. This *is* the LLM's JSON
+    schema.
+
+    Deliberately two fields and no policy number. An estimate reads the policy
+    document, which is the same for every policyholder, so asking for a policy
+    number before answering "what would I pay on a $35,000 burst pipe?" wastes
+    the turn - the same reasoning as rule 5 in the system prompt.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    claim_type: ClaimType = Field(
+        description=(
+            "How to file this claim. These are filing categories, not a "
+            "statement of cover - only search_policy_documents can say what "
+            "the policy covers. A loss that is neither of these is not a "
+            "claim to be filed under the nearer one: tell the policyholder "
+            "the policy does not cover it."
+        ),
+    )
+    amount: Decimal = Field(
+        gt=Decimal("0"),
+        le=Decimal("1000000"),
+        max_digits=12,
+        decimal_places=2,
+        description=(
+            "The loss or repair amount the policyholder stated, in USD. Never "
+            "estimate it and never round it: if they have not given a figure, "
+            "ask for one. A split computed from a number nobody said is a "
+            "number nobody can act on."
+        ),
+    )
+
+
 class SubmitClaimArgs(BaseModel):
     """Tool arguments for ``submit_claim``. This *is* the LLM's JSON schema.
 
@@ -49,7 +101,7 @@ class SubmitClaimArgs(BaseModel):
     documentation, and changing them changes tool-argument accuracy.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     # No `examples` on the fields that carry the policyholder's own data.
     #
@@ -70,8 +122,13 @@ class SubmitClaimArgs(BaseModel):
         ),
     )
     claim_type: ClaimType = Field(
-        description="Must be one of the listed categories. Map the user's "
-                    "wording onto the closest option and say which you chose.",
+        description=(
+            "How to file this claim. These are filing categories, not a "
+            "statement of cover - only search_policy_documents can say what "
+            "the policy covers. A loss that is neither of these is not a "
+            "claim to be filed under the nearer one: tell the policyholder "
+            "the policy does not cover it."
+        ),
     )
     amount: Decimal = Field(
         gt=Decimal("0"),
@@ -98,7 +155,7 @@ class SubmitClaimArgs(BaseModel):
 class Claim(BaseModel):
     """A claim record as stored in ``mock_claims.json``."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     claim_id: str = Field(pattern=CLAIM_ID_PATTERN)
     policy_number: str = Field(pattern=POLICY_NUMBER_PATTERN)

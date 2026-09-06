@@ -94,7 +94,7 @@ async def health_deep(deps: Deps = Depends(get_deps)) -> DeepHealthResponse:
 
 async def _collect(
     deps: Deps, run_id: str, timeout_s: float
-) -> tuple[str, list[str], list[ToolCall], str | None]:
+) -> tuple[str, list[str], list[ToolCall], str | None, dict[str, Any]]:
     """Buffer a run's event stream into a complete answer.
 
     The WebSocket route forwards these same events as they arrive; the only
@@ -104,6 +104,9 @@ async def _collect(
     sources: list[str] = []
     tool_calls: list[ToolCall] = []
     trace_id: str | None = None
+    # Confidence and the unknown flag ride the terminal event, alongside the
+    # provider and model that produced them.
+    verdict: dict[str, Any] = {}
     saw_terminal = False
 
     async for event in deps.queue.subscribe(run_id, timeout_s):
@@ -127,6 +130,12 @@ async def _collect(
             if event.payload.get("text"):
                 text = [str(event.payload["text"])]
             trace_id = event.payload.get("trace_id")
+            verdict = {
+                "confidence": event.payload.get("confidence"),
+                "model_confidence": event.payload.get("model_confidence"),
+                "confidence_reason": event.payload.get("confidence_reason"),
+                "unknown": bool(event.payload.get("unknown", False)),
+            }
         elif event.type == "error":
             raise HTTPException(
                 status_code=502,
@@ -150,7 +159,7 @@ async def _collect(
             detail="The assistant did not respond in time. Please try again.",
         )
 
-    return "".join(text).strip(), sources, tool_calls, trace_id
+    return "".join(text).strip(), sources, tool_calls, trace_id, verdict
 
 
 @app.post("/api/v1/chat", response_model=ChatResponse, tags=["chat"])
@@ -202,7 +211,7 @@ async def chat(
         deadline_s=deps.settings.run_timeout_s,
     )
 
-    text, sources, tool_calls, trace_id = await _collect(
+    text, sources, tool_calls, trace_id, verdict = await _collect(
         deps, run_id, deps.settings.run_timeout_s
     )
 
@@ -227,6 +236,7 @@ async def chat(
         tool_calls=tool_calls,
         conversation_id=conversation_id,
         trace_id=trace_id,
+        **verdict,
     )
 
 

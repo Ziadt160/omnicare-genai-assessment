@@ -169,6 +169,10 @@ class AgentWorker:
             provider=self.settings.llm_provider,
             model=self.settings.llm_model,
             stopped_reason=result.get("stopped_reason"),
+            confidence=result.get("answer_confidence"),
+            model_confidence=result.get("model_confidence"),
+            confidence_reason=result.get("confidence_reason"),
+            unknown=bool(result.get("answer_unknown")),
         )
 
     async def _emit_tool_calls(self, run_id: str, result: dict[str, Any], seq: int) -> int:
@@ -269,7 +273,7 @@ def build_worker(
     from .providers.registry import build_chat_model, default_retry_policy, resolve
     from .providers.resilient import ResilientChatModel
     from .retrieval_client import RetrievalClient
-    from .tools.claims import build_claims_tools
+    from .tools.claims import build_claims_tools, build_settlement_provider
     from .tools.policy import build_policy_tool
 
     settings = settings or AgentSettings()
@@ -303,14 +307,20 @@ def build_worker(
             "(or set LLM_PROVIDER=ollama) for real answers."
         )
         config = resolve("fake")
-    primary = build_chat_model(config, timeout=settings.llm_timeout_s)
+    primary = build_chat_model(
+        config, timeout=settings.llm_timeout_s, max_tokens=settings.llm_max_tokens
+    )
 
     fallback = None
     if settings.llm_fallback_provider:
         fallback_config = resolve(
             settings.llm_fallback_provider, "", settings.llm_fallback_api_key
         )
-        fallback = build_chat_model(fallback_config, timeout=settings.llm_timeout_s)
+        fallback = build_chat_model(
+            fallback_config,
+            timeout=settings.llm_timeout_s,
+            max_tokens=settings.llm_max_tokens,
+        )
 
     # Egress limit, retry, breaker and fallback - all of which existed in
     # libs.resilience and were previously called from nowhere.
@@ -330,6 +340,9 @@ def build_worker(
         checkpointer=checkpointer or InMemorySaver(),
         require_confirmation=settings.require_claim_confirmation,
         max_iterations=settings.max_graph_iterations,
+        # Same provider the tools use, so the split shown on the confirmation
+        # and the split reported after filing are the one computation.
+        settlement=build_settlement_provider(retrieval.sections),
     )
     return AgentWorker(settings, RedisQueue(settings.redis_url), graph)
 

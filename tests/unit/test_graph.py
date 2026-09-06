@@ -15,7 +15,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from agent.app.graph.build import build_graph
-from agent.app.tools.claims import build_claims_tools
+from agent.app.tools.claims import build_claims_tools, build_settlement_provider
 from agent.app.tools.policy import build_policy_tool
 from libs.adapters.claims_memory import InMemoryClaimsRepo
 from libs.adapters.llm_fake import FakeLLM, TextTurn, ToolTurn
@@ -91,15 +91,34 @@ def both_sections() -> StubSearcher:
     return StubSearcher([SECTION_1, SECTION_2])
 
 
-async def policy_sections() -> list[tuple[str, str]]:
-    """What the retrieval service serves from the indexed document."""
-    return [(SECTION_1.section_title, SECTION_1.text),
-            (SECTION_2.section_title, SECTION_2.text)]
+async def policy_sections() -> list[tuple[str, str, str]]:
+    """What the retrieval service serves from the indexed document.
+
+    Three elements, as `RetrievalClient.sections()` returns: the source file is
+    what lets a settlement carry a citation, and a two-element provider here
+    would have hidden the bug where an estimate produced none.
+    """
+    return [(SECTION_1.section_title, SECTION_1.text, SECTION_1.source_file),
+            (SECTION_2.section_title, SECTION_2.text, SECTION_2.source_file)]
 
 
-def make(llm: FakeLLM, repo, searcher, **kw):
+async def water_damage_only_sections() -> list[tuple[str, str, str]]:
+    """A policy that states terms for one claim type and not the other.
+
+    `ClaimType` names only what this policy covers, so "Liability" and "Auto"
+    can no longer reach a tool - Pydantic rejects them at the schema. The
+    behaviour those cases used to exercise, a claim type the document states no
+    terms for, is still real and still needs testing: it is what happens when a
+    policy is edited, or a second policy is loaded that is missing a section.
+    """
+    return [(SECTION_1.section_title, SECTION_1.text, SECTION_1.source_file)]
+
+
+def make(llm: FakeLLM, repo, searcher, *, sections=None, **kw):
+    sections = sections or policy_sections
     tools = [build_policy_tool(searcher),
-             *build_claims_tools(repo, sections=policy_sections)]
+             *build_claims_tools(repo, sections=sections)]
+    kw.setdefault("settlement", build_settlement_provider(sections))
     return build_graph(llm, tools, checkpointer=InMemorySaver(), **kw)
 
 
@@ -194,13 +213,14 @@ async def test_invalid_tool_arguments_do_not_crash_the_graph(repo, searcher) -> 
     assert out["messages"][-1].type == "ai"
 
 
-async def test_bound_tools_are_the_expected_three(repo, searcher) -> None:
-    """Two operational backend tools plus retrieval. A tool silently dropping
+async def test_bound_tools_are_the_expected_four(repo, searcher) -> None:
+    """Three operational backend tools plus retrieval. A tool silently dropping
     out of the binding is invisible until an eval fails, so assert it here."""
     llm = FakeLLM([TextTurn("hi")])
     await run(make(llm, repo, searcher), "hello")
     assert set(llm.tool_names_offered()) == {
         "search_policy_documents", "get_claim_status", "submit_claim",
+        "estimate_claim_payment",
     }
 
 
@@ -1003,15 +1023,18 @@ async def test_the_refusal_names_what_is_missing(repo, searcher) -> None:
     assert "estimate" in message or "how much" in message or "figure" in message
 
 
-# --------------------------------------------- the policy's own coverage cap
+# -------------------------------------- the policy's own figures, as a split
 
-async def test_a_claim_above_the_policy_limit_is_not_written(repo, searcher) -> None:
-    """Section 1 covers water damage up to $25,000. A claim for $250,000 - ten
-    times the limit - was filed without comment, because the only thing
-    checking the amount was a model doing arithmetic in its head.
+async def test_an_over_limit_claim_is_filed_with_the_split_shown_first(
+    repo, searcher
+) -> None:
+    """Section 1 covers water damage up to $25,000. A $250,000 loss is not an
+    invalid claim - it is a claim the policy covers $25,000 of - so it is filed
+    once the policyholder has confirmed.
 
-    The figure comes from the policy document, so editing the policy changes
-    the rule and nothing in the code needs to know what the limits are.
+    What must never happen is confirming it blind. The breakdown goes into the
+    confirmation prompt, because agreeing to file $250,000 means something
+    quite different once you can see that $225,500 of it lands on you.
     """
     llm = FakeLLM([
         ToolTurn("submit_claim", {
@@ -1019,38 +1042,390 @@ async def test_a_claim_above_the_policy_limit_is_not_written(repo, searcher) -> 
             "amount": "250000.00",
             "description": "A pipe burst and flooded the whole house.",
         }),
-        TextTurn("relaying the refusal"),
+        TextTurn("Filed. Your confirmation ID is CLM-9015."),
     ])
     graph = make(llm, repo, searcher)
     config = cfg()
-    await graph.ainvoke(
+    paused = await graph.ainvoke(
         {"messages": [HumanMessage(content=
             "file a water damage claim on POL-1092 for $250,000 - a burst pipe")],
          "user_id": "usr_123", "channel": "text"},
         config,
     )
+
+    readback = paused["__interrupt__"][0].value["readback"]
+    assert "$25,000.00" in readback, "the confirmation did not say what OmniCare pays"
+    assert "$225,000.00" in readback, "the confirmation did not say what the policyholder pays"
+
     await graph.ainvoke(Command(resume="yes"), config)
+    assert len(await repo.list_ids()) == 3, "a confirmed claim was not filed"
 
-    assert await repo.list_ids() == ["CLM-8821", "CLM-9014"], "an over-limit claim was filed"
 
-
-async def test_the_refusal_quotes_the_policy(repo, searcher) -> None:
+async def test_the_settlement_quotes_the_policy(repo, searcher) -> None:
     """"Your policy covers this up to $25,000" is checkable by the
     policyholder. "The limit is $25,000" is one more assertion, which is what
     this whole layer exists to avoid."""
     tools = build_claims_tools(repo, sections=policy_sections)
-    submit = next(t for t in tools if t.name == "submit_claim")
+    estimate = next(t for t in tools if t.name == "estimate_claim_payment")
 
-    out = await submit.ainvoke({
-        "policy_number": "POL-1092", "claim_type": "Water Damage",
-        "amount": "250000.00", "description": "A pipe burst and flooded the house.",
+    out = await estimate.ainvoke({
+        "claim_type": "Water Damage", "amount": "250000.00",
     })
 
-    assert out["filed"] is False
-    assert out["error"] == "over_policy_limit"
+    assert out["estimated"] is True
     assert out["limit"] == 25000.0
+    assert out["insurer_pays"] == 25000.0
+    assert out["policyholder_pays"] == 225000.0
     assert "Section 1" in out["section"]
-    assert "covered up to" in out["policy_says"].lower()
+    assert any("covered up to" in s.lower() for s in out["policy_says"])
+
+
+async def test_the_two_shares_always_sum_to_the_claim(repo) -> None:
+    """The invariant worth having. A breakdown whose parts do not add up is
+    worse than no breakdown, because it still looks authoritative - and the
+    figures that prompted this feature summed to $500 more than the claim."""
+    tools = build_claims_tools(repo, sections=policy_sections)
+    estimate = next(t for t in tools if t.name == "estimate_claim_payment")
+
+    for amount in ("100.00", "500.00", "501.00", "24999.00", "35000.00", "250000.00"):
+        out = await estimate.ainvoke({"claim_type": "Water Damage", "amount": amount})
+        assert out["insurer_pays"] + out["policyholder_pays"] == float(amount), amount
+
+
+async def test_no_split_is_offered_for_a_claim_type_the_policy_omits(repo) -> None:
+    """A breakdown produced from an absence is the model's arithmetic wearing
+    the system's authority, which is the whole failure this path exists to
+    prevent."""
+    tools = build_claims_tools(repo, sections=water_damage_only_sections)
+    estimate = next(t for t in tools if t.name == "estimate_claim_payment")
+
+    out = await estimate.ainvoke({"claim_type": "Personal Property", "amount": "80000.00"})
+
+    assert out["estimated"] is False
+    assert out["error"] == "no_policy_terms"
+    assert "insurer_pays" not in out
+
+
+# --------------------------------- stale evidence from an earlier turn
+
+async def test_a_follow_up_cannot_answer_from_the_previous_turns_search(
+    repo, both_sections
+) -> None:
+    """Reported with a screenshot. Asked a follow-up coverage question, the
+    assistant answered from the policy text still sitting in its context from
+    an earlier turn - no search, no citation - and filled the gaps with "Fire
+    Damage", "Liability", "Auto" and "Medical". Four of those five names are
+    the `ClaimType` enum out of `submit_claim`'s own schema.
+
+    The model cannot be stopped from reciting what it is shown, so it is no
+    longer shown it: previous turns' tool results are elided from the context,
+    and a coverage question has to go back through search. That also makes the
+    citation real - `ground` can only attribute to sections retrieved *this*
+    turn, so an answer built from stale text was always going to arrive uncited.
+    """
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe", "top_k": 3}),
+        TextTurn(f"Sudden pipe bursts are covered up to $25,000 ({CITATION_1})."),
+        # Turn two: the model must call search again rather than answering.
+        ToolTurn("search_policy_documents", {"query": "personal property", "top_k": 3}),
+        TextTurn(f"Personal property is covered up to $10,000 ({CITATION_2})."),
+    ])
+    graph = make(llm, repo, both_sections)
+    config = cfg()
+
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="I had a pipe burst")],
+         "user_id": "usr_123", "channel": "text"},
+        config,
+    )
+    out = await graph.ainvoke(
+        {"messages": [HumanMessage(content="What else does it cover?")]}, config
+    )
+
+    assert [t["name"] for t in out["tool_invocations"]] == ["search_policy_documents"]
+    assert out["sources"], "a follow-up coverage answer arrived with no citation"
+
+
+def test_stale_tool_output_is_elided_but_history_is_not_rewritten() -> None:
+    """Only what is sent to the model changes. The checkpoint keeps every
+    message intact, so history, replay and the confirmation flow are
+    untouched."""
+    from langchain_core.messages import ToolMessage
+
+    from agent.app.graph.nodes import STALE_TOOL_RESULT, _without_stale_tool_output
+
+    history = [
+        HumanMessage(content="I had a pipe burst"),
+        ToolMessage(content='{"chunks": [{"text": "covered up to $25,000"}]}',
+                    tool_call_id="a"),
+        HumanMessage(content="What else does it cover?"),
+        ToolMessage(content='{"chunks": [{"text": "this turn"}]}', tool_call_id="b"),
+    ]
+    trimmed = _without_stale_tool_output(history)
+
+    assert trimmed[1].content == STALE_TOOL_RESULT, "the old result is still visible"
+    assert "this turn" in trimmed[3].content, "the current turn's result was elided"
+    assert trimmed[1].tool_call_id == "a", "the call it answers must still match"
+    assert "25,000" in history[1].content, "the checkpointed history was mutated"
+
+
+# ------------------------------------------- the shape the answer leaves in
+
+async def test_an_answer_returned_as_json_is_unwrapped(repo, searcher) -> None:
+    """A small model with a tool schema in its context sometimes answers with a
+    serialized object. The gateway would hand that straight through and the
+    policyholder would read JSON."""
+    llm = FakeLLM([TextTurn('{"response": "Your deductible is $500."}')])
+    out = await run(make(llm, repo, searcher), "What is my deductible?")
+
+    assert out["messages"][-1].content == "Your deductible is $500."
+
+
+async def test_a_text_answer_keeps_its_markdown(repo, searcher) -> None:
+    """The chat UI renders headings and lists. Flattening them here would throw
+    away structure the reader can use."""
+    body = "### Summary" + NL + "- Covered up to $25,000."
+    llm = FakeLLM([TextTurn(body)])
+    out = await run(make(llm, repo, searcher), "Summarise section 1")
+
+    assert out["messages"][-1].content == body
+
+
+async def test_a_voice_answer_keeps_none_of_it(repo, searcher) -> None:
+    """There is no renderer on a phone call. Without this a TTS engine is
+    handed "###" and "**" to pronounce."""
+    llm = FakeLLM([TextTurn(
+        "### Summary" + NL + "- **Covered** up to $25,000 with a $500 deductible."
+    )])
+    out = await run(
+        make(llm, repo, searcher), "Summarise section 1", channel="voice"
+    )
+
+    answer = out["messages"][-1].content
+    assert "#" not in answer and "**" not in answer
+    assert "$25,000" in answer and "$500" in answer
+
+
+# ------------------------------- values the policyholder never gave, in prose
+
+async def test_a_policy_number_nobody_gave_never_reaches_the_policyholder(
+    repo, searcher
+) -> None:
+    """Reported from a real session. Told only "I had a pipe burst in my
+    kitchen", the model replied "Policy Number: POL-1092 ... I will use
+    $100,000 as an initial estimate. Do you want to proceed?" - in prose,
+    without calling submit_claim.
+
+    No tool call means no confirmation node, so nothing stood between that
+    message and the policyholder. The write was still refused a turn later, but
+    by then they had already been shown another customer's real policy number:
+    POL-1092 is a live row in mock_claims.json.
+    """
+    llm = FakeLLM([TextTurn(NL.join([
+        "Got it! I will use the following details:",
+        "",
+        "- **Policy Number**: POL-1092",
+        "- **Claim Type**: Water Damage",
+        "",
+        "I will now submit the claim. Do you want to proceed?",
+    ]))])
+    out = await run(make(llm, repo, searcher), "I had a pipe burst in my kitchen")
+
+    answer = out["messages"][-1].content
+    assert "POL-1092" not in answer, "an invented policy number reached the policyholder"
+    assert "policy number" in answer.lower(), "it should ask for the real one"
+
+
+async def test_a_policy_number_a_tool_returned_is_left_alone(repo, searcher) -> None:
+    """Found in review, and it broke the most ordinary read in the product.
+
+    `get_claim_status` answers with the claim's own `policy_number` and its
+    docstring tells the model to report it - so "Claim CLM-8821 on policy
+    POL-1092 is Approved" was being replaced wholesale by a demand for a policy
+    number the policyholder had no reason to give, on a turn that was not about
+    filing anything at all.
+
+    The check is "did anyone but the model produce this number", not "did the
+    human type it".
+    """
+    llm = FakeLLM([
+        ToolTurn("get_claim_status", {"claim_id": "CLM-8821"}),
+        TextTurn("Claim CLM-8821 on policy POL-1092 is Approved, for $3,500.00."),
+    ])
+    out = await run(make(llm, repo, searcher), "What is the status of claim CLM-8821?")
+
+    answer = out["messages"][-1].content
+    assert "POL-1092" in answer
+    assert "Approved" in answer
+
+
+async def test_a_tool_result_does_not_launder_a_number_into_a_later_turn(
+    repo, searcher
+) -> None:
+    """`guard` clears `tool_invocations` every turn, so a number a lookup
+    returned cannot excuse the model quoting it once the subject has moved on."""
+    graph = make(
+        FakeLLM([
+            ToolTurn("get_claim_status", {"claim_id": "CLM-8821"}),
+            TextTurn("Claim CLM-8821 on policy POL-1092 is Approved."),
+            TextTurn("I'll file that against POL-1092 for you."),
+        ]),
+        repo,
+        searcher,
+    )
+    config = cfg()
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="status of CLM-8821?")],
+         "user_id": "usr_123", "channel": "text"},
+        config,
+    )
+    out = await graph.ainvoke(
+        {"messages": [HumanMessage(content="I had a pipe burst, file a claim")]}, config
+    )
+
+    assert "POL-1092" not in out["messages"][-1].content
+
+
+async def test_a_policy_number_the_policyholder_gave_is_left_alone(repo, searcher) -> None:
+    """The check is "did they say it", not "is there a policy number here". An
+    assistant that cannot repeat the number back is useless for confirming it.
+    """
+    llm = FakeLLM([TextTurn(
+        "Thanks - I have POL-1092 for you. How much are you claiming?"
+    )])
+    out = await run(
+        make(llm, repo, searcher),
+        "My policy is POL-1092 and a pipe burst in the kitchen.",
+    )
+
+    assert "POL-1092" in out["messages"][-1].content
+
+
+async def test_an_amount_the_model_invented_never_reaches_the_policyholder(
+    repo, searcher
+) -> None:
+    """Rule 6 forbids estimating an amount and the model estimated anyway,
+    which is the whole argument for checking rather than instructing."""
+    llm = FakeLLM([TextTurn(
+        "Since we don't have a specific amount yet, I will use $100,000 as an "
+        "initial estimate. Shall I file it?"
+    )])
+    out = await run(make(llm, repo, searcher), "I had a pipe burst in my kitchen")
+
+    answer = out["messages"][-1].content
+    assert "$100,000" not in answer, "an invented claim amount reached the policyholder"
+    assert "how much" in answer.lower(), "it should ask for the real figure"
+
+
+async def test_asking_for_an_amount_is_not_mistaken_for_inventing_one(
+    repo, searcher
+) -> None:
+    """The distinction the pattern has to hold. Asking for an estimated amount
+    is exactly the right thing to say; announcing one is the failure. A check
+    that clobbered the question would push the model toward guessing instead of
+    asking, which is the opposite of what it is for."""
+    llm = FakeLLM([TextTurn(
+        "Sorry to hear that. Could you give me an estimated amount for the "
+        "damage, and your policy number?"
+    )])
+    out = await run(make(llm, repo, searcher), "I had a pipe burst in my kitchen")
+
+    assert "estimated amount" in out["messages"][-1].content
+
+
+async def test_the_policys_own_figures_are_not_treated_as_invented(
+    repo, searcher
+) -> None:
+    """$25,000 and $500 come from the document, not from the model. A coverage
+    answer must survive untouched."""
+    llm = FakeLLM([
+        ToolTurn("search_policy_documents", {"query": "burst pipe", "top_k": 3}),
+        TextTurn(
+            f"Sudden pipe bursts are covered up to $25,000 with a $500 "
+            f"deductible ({CITATION_1})."
+        ),
+    ])
+    out = await run(make(llm, repo, searcher), "Am I covered for a burst pipe?")
+
+    answer = out["messages"][-1].content
+    assert "$25,000" in answer and "$500" in answer
+    assert out["sources"] == [CITATION_1]
+
+
+async def test_an_estimate_carries_a_citation(repo, searcher) -> None:
+    """Reported from a real session: the answer had no citation and the UI
+    showed none.
+
+    A payment split is read straight out of the policy without going through
+    search, so nothing added the section to `retrieved` and `ground` had
+    nothing to report - an answer entirely grounded in Section 1 arrived with
+    no way to name Section 1. The section the split was read from is now
+    recorded in the same shape a searched chunk takes.
+    """
+    llm = FakeLLM([
+        ToolTurn("estimate_claim_payment", {"claim_type": "Water Damage", "amount": "35000"}),
+        TextTurn("OmniCare would pay $25,000.00 and you would pay $10,000.00."),
+    ])
+    out = await run(
+        make(llm, repo, searcher),
+        "A pipe burst and the repair is $35,000. How much will you pay?",
+    )
+
+    assert out["sources"] == [CITATION_1], "an estimate produced no citation"
+
+
+async def test_an_estimate_cites_only_the_section_it_used(repo, both_sections) -> None:
+    """Both sections are in the document; only one governs a water damage
+    claim. Citing both would devalue the citation exactly where it should carry
+    the most weight."""
+    llm = FakeLLM([
+        ToolTurn("estimate_claim_payment", {"claim_type": "Personal Property", "amount": "12000"}),
+        TextTurn("OmniCare would pay $10,000.00 and you would pay $2,000.00."),
+    ])
+    out = await run(make(llm, repo, both_sections), "My electronics - $12,000. My share?")
+
+    assert out["sources"] == [CITATION_2]
+
+
+async def test_an_estimate_with_no_policy_terms_cites_nothing(repo, searcher) -> None:
+    """A citation promises a human can go and read the thing. This policy
+    states nothing about personal property, so there is nothing to point at -
+    and a citation assembled anyway would be exactly the fabrication `ground`
+    exists to strip."""
+    llm = FakeLLM([
+        ToolTurn("estimate_claim_payment",
+                 {"claim_type": "Personal Property", "amount": "9000"}),
+        TextTurn("Your policy states no terms for that, so I cannot work out a split."),
+    ])
+    graph = make(llm, repo, searcher, sections=water_damage_only_sections)
+    out = await run(graph, "How much would you pay on $9,000 of stolen electronics?")
+
+    assert out["sources"] == []
+
+
+async def test_the_prompt_forbids_jokes(repo, searcher) -> None:
+    """A prompt rule cannot be asserted through a scripted model, so this pins
+    only that the rule is still there. People reach this assistant after a
+    burst pipe or a theft; humour there reads as being laughed at by the
+    company holding their money."""
+    from agent.app.graph.nodes import SYSTEM_PROMPT
+
+    assert "No jokes" in SYSTEM_PROMPT
+
+
+async def test_a_claim_below_the_deductible_pays_nothing(repo) -> None:
+    """$300 against a $500 deductible: the policyholder is out $300, not $500.
+    Reporting the deductible as their share would overstate it by two hundred
+    dollars while still adding up to nothing sensible."""
+    tools = build_claims_tools(repo, sections=policy_sections)
+    estimate = next(t for t in tools if t.name == "estimate_claim_payment")
+
+    out = await estimate.ainvoke({"claim_type": "Water Damage", "amount": "300.00"})
+
+    assert out["insurer_pays"] == 0.0
+    assert out["policyholder_pays"] == 300.0
+    assert out["below_deductible"] is True
+    assert "below the $500.00 deductible" in out["payment_summary"]
 
 
 async def test_a_claim_within_the_limit_is_written(repo, searcher) -> None:
@@ -1067,15 +1442,14 @@ async def test_a_claim_within_the_limit_is_written(repo, searcher) -> None:
 
 
 async def test_a_claim_type_the_policy_does_not_cap_is_allowed(repo) -> None:
-    """Fails open. "Liability" appears nowhere in this policy, and refusing a
-    claim against a limit we could not find would be worse than not checking -
-    the confirmation gate still applies."""
-    tools = build_claims_tools(repo, sections=policy_sections)
+    """Fails open. Refusing a claim against a limit we could not find would be
+    worse than not checking - the confirmation gate still applies."""
+    tools = build_claims_tools(repo, sections=water_damage_only_sections)
     submit = next(t for t in tools if t.name == "submit_claim")
 
     out = await submit.ainvoke({
-        "policy_number": "POL-1092", "claim_type": "Liability",
-        "amount": "80000.00", "description": "A visitor was injured on the property.",
+        "policy_number": "POL-1092", "claim_type": "Personal Property",
+        "amount": "80000.00", "description": "A laptop was stolen from the house.",
     })
 
     assert out["confirmation_id"].startswith("CLM-")
@@ -1100,28 +1474,22 @@ async def test_an_unreadable_policy_does_not_block_a_claim(repo) -> None:
 
 
 async def test_a_declined_tool_call_is_not_reported_as_ok(repo, searcher) -> None:
-    """The chip is the policyholder's evidence of what happened. An over-limit
-    claim was refused and still showed a green `submit_claim ok`, which reads
-    as "filed"."""
-    llm = FakeLLM([
-        ToolTurn("submit_claim", {
-            "policy_number": "POL-1092", "claim_type": "Water Damage",
-            "amount": "250000.00", "description": "A pipe burst and flooded the house.",
-        }),
-        TextTurn("relaying the refusal"),
-    ])
-    graph = make(llm, repo, searcher)
-    config = cfg()
-    await graph.ainvoke(
-        {"messages": [HumanMessage(content=
-            "file a water damage claim on POL-1092 for $250,000 - a burst pipe")],
-         "user_id": "usr_123", "channel": "text"},
-        config,
-    )
-    out = await graph.ainvoke(Command(resume="yes"), config)
+    """The chip is the policyholder's evidence of what happened, and a tool
+    that declined must not show green.
 
-    call = next(t for t in out["tool_invocations"] if t["name"] == "submit_claim")
-    assert call["status"] == "error", "a refused write must not read as filed"
+    This used to be demonstrated with an over-limit claim, back when the cap
+    refused the write. The cap now produces a breakdown instead, so the
+    invariant is pinned on a lookup that genuinely fails - the behaviour under
+    test was always the chip, not the cap.
+    """
+    llm = FakeLLM([
+        ToolTurn("get_claim_status", {"claim_id": "CLM-0000"}),
+        TextTurn("I could not find a claim with the ID CLM-0000."),
+    ])
+    out = await run(make(llm, repo, searcher), "what is the status of CLM-0000?")
+
+    call = next(t for t in out["tool_invocations"] if t["name"] == "get_claim_status")
+    assert call["status"] == "error", "a declined tool call must not read as ok"
 
 
 async def test_a_successful_tool_call_is_still_ok(repo, searcher) -> None:

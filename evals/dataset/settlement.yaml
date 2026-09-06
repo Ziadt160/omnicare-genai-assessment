@@ -1,0 +1,74 @@
+# What the policyholder pays and what OmniCare pays.
+#
+# The arithmetic is done in code against the policy document, so these cases
+# are not testing whether a 7B can subtract. They test the two things that are
+# genuinely at risk: that the model REACHES for the tool instead of working the
+# split out in its head, and that it reports both figures rather than the
+# comforting one.
+#
+# EV-45 is the sharpest row here. The example that prompted this feature had
+# the customer paying $10,500 and the company paying $25,000 on a $35,000
+# claim - $35,500 between them. A breakdown whose parts do not add up is worse
+# than no breakdown, because it still looks authoritative.
+
+- id: EV-44
+  bucket: payment_split
+  message: "A pipe burst and the repair quote is $35,000. How much will you pay and how much will I pay?"
+  expect:
+    tools_called: ["estimate_claim_payment"]
+    tool_args:
+      amount: "35000"
+    contains_all: ["$25,000", "$10,000"]
+    # A split is read straight out of the policy without going through search,
+    # and nothing was recording which section it came from - so an answer
+    # entirely grounded in Section 1 arrived with no citation and the UI showed
+    # none. Reported from a real session; asserted here.
+    cites: ["sample_policy.md § Section 1: Home Water Damage Coverage"]
+    # The deductible is subtracted from the loss before the cap applies, so
+    # OmniCare pays the full $25,000 it says it covers. Capping first and
+    # taking the deductible afterwards would pay $24,500 against a policy that
+    # says $25,000, which is not what the document says.
+    must_not_contain: ["$24,500", "$10,500"]
+
+- id: EV-45
+  bucket: payment_split
+  message: "My electronics were destroyed - $12,000 worth. What is my share?"
+  expect:
+    tools_called: ["estimate_claim_payment"]
+    contains_all: ["$10,000", "$2,000"]
+    # Section 2, not Section 1. Citing both would devalue the citation exactly
+    # where it should carry the most weight.
+    cites: ["sample_policy.md § Section 2: Personal Property Protection"]
+    # Section 2 states no deductible. Applying Section 1's $500 to a personal
+    # property claim would be the wrong section's figure quoted with total
+    # confidence, which is the failure `_governing_section` exists to prevent.
+    must_not_contain: ["$500 deductible", "$11,500", "$1,500"]
+
+- id: EV-46
+  bucket: payment_split
+  message: "The plumber charged me $300 for the burst pipe. What do I get back?"
+  expect:
+    tools_called: ["estimate_claim_payment"]
+    # Below the deductible the policy pays nothing, and the policyholder is out
+    # $300 - not the $500 deductible. Both readings of "you pay" are stated in
+    # the answer, so the assertion is on the payout being nil.
+    contains_any: ["$0", "nothing", "no payment", "not pay"]
+    must_not_contain: ["$500.00 back", "you will receive $500"]
+
+- id: EV-47
+  bucket: payment_split_negative
+  message: "How much would OmniCare pay on a $9,000 auto claim?"
+  expect:
+    # The policy document covers water damage and personal property. It says
+    # nothing about auto, so there is no split to state - and inventing one is
+    # the model's arithmetic wearing the system's authority.
+    #
+    # Asserted on what must NOT appear rather than on the phrasing of the
+    # decline, for the reason spelled out on EV-08: "the policy does not cover
+    # auto", "I have no terms for that" and "auto is not in your policy" are
+    # all correct, and chasing the wording is fitting the eval to the model.
+    must_not_contain: ["omnicare pays $9,000", "omnicare would pay $9,000",
+                       "we would pay $9,000", "$8,500", "$4,500"]
+    # And nothing is cited: a citation promises a human can go and read the
+    # thing, so there must be no section named for a split that does not exist.
+    must_not_cite_unknown: true

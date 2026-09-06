@@ -135,7 +135,15 @@ async def test_coverage_question_returns_the_graded_shape(client) -> None:
     assert r.status_code == 200
 
     body = r.json()
-    assert set(body) == {"response", "sources", "tool_calls", "conversation_id", "trace_id"}
+    # The three fields the assessment specifies must be present and correct;
+    # everything else is additive and must not displace them.
+    assert {"response", "sources", "tool_calls"} <= set(body)
+    assert set(body) == {
+        "response", "sources", "tool_calls", "conversation_id", "trace_id",
+        # How far the system stands behind the answer, and what the model
+        # claimed before it was capped. Null unless the model gave a number.
+        "confidence", "model_confidence", "confidence_reason", "unknown",
+    }
     assert "$25,000" in body["response"]
     assert body["sources"] == [CITATION]
     assert body["tool_calls"][0]["name"] == "search_policy_documents"

@@ -21,7 +21,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from agent.app.graph.build import build_graph
-from agent.app.tools.claims import build_claims_tools
+from agent.app.tools.claims import build_claims_tools, build_settlement_provider
 from agent.app.tools.policy import build_policy_tool
 from evals.runner import CaseResult, EvalCase, GATES, Outcome, check, format_report, load_cases, score
 from libs.adapters.claims_memory import InMemoryClaimsRepo
@@ -143,6 +143,13 @@ def script_for(case: EvalCase, searcher: BM25Searcher) -> list:
     wants_write = "submit_claim" in tools or bool(
         expect.get("requires_confirmation") or "claim_written" in expect
     )
+    # Ordered after `wants_write` deliberately. A payment_split case that also
+    # asserts a confirmation is about the prompt shown before the write, not
+    # about the estimate tool, and routing it to the estimate made it pass
+    # while testing nothing it claimed to test.
+    wants_estimate = not wants_write and (
+        "estimate_claim_payment" in tools or case.bucket.startswith("payment_split")
+    )
     wants_status = "get_claim_status" in tools or bool(
         normalize_claim_id(case.message) and not wants_write and declared is None
     )
@@ -150,7 +157,56 @@ def script_for(case: EvalCase, searcher: BM25Searcher) -> list:
         expect.get("cites") or expect.get("must_not_cite_unknown")
     )
     if declared == []:
-        wants_write = wants_status = wants_search = False
+        wants_estimate = wants_write = wants_status = wants_search = False
+
+    if case.bucket == "fabricated_values":
+        # The failure, scripted verbatim from the reported session - the way
+        # EV-08 scripts a fabricated citation. The model answers in prose with
+        # values nobody gave and asks for confirmation itself, so no tool call
+        # and no confirmation node ever run. What is under test is whether
+        # `ground` takes it out.
+        #
+        # The policy number is whatever the policyholder actually gave, and
+        # POL-1092 only when they gave none - a model handed a number uses that
+        # number, and inventing one on top would mean every case in this bucket
+        # tripped the policy-number check and none of them ever reached the
+        # amount check.
+        given = normalize_policy_number(case.message)
+        return [TextTurn(
+            f"Got it! Let's proceed with filing a claim for the pipe burst in "
+            f"your kitchen. To get started, I will use the following details: "
+            f"Policy Number: {given or 'POL-1092'}, Claim Type: Water Damage. "
+            f"Since we don't have a specific amount yet, I will use $100,000 as "
+            f"an initial estimate. Do you want to proceed with submitting this "
+            f"claim?"
+        )]
+
+    if wants_estimate:
+        # The claim type the message is about, chosen the way a competent model
+        # would: electronics and jewelry are Personal Property, a car is Auto,
+        # water is water.
+        lowered = case.message.lower()
+        if any(w in lowered for w in ("auto", "car", "medical", "liability")):
+            # `ClaimType` names only what the policy covers, so there is no
+            # category to estimate a car under and the tool cannot be called
+            # with one. A competent model says so rather than mapping the loss
+            # onto whichever covered type is nearer - which would answer a
+            # collision with the burst-pipe figures.
+            return [TextTurn(
+                "Your policy covers water damage and personal property. It does "
+                "not cover that, so there is no amount I can quote for it."
+            )]
+
+        claim_type = "Water Damage"
+        if any(w in lowered for w in ("electronic", "jewel", "laptop", "furniture", "tv")):
+            claim_type = "Personal Property"
+
+        amount = expect.get("tool_args", {}).get("amount") or _amount_in(case.message)
+        args = {"claim_type": claim_type, "amount": amount or "1000.00"}
+        return [
+            ToolTurn("estimate_claim_payment", args),
+            TextTurn(_settlement_answer(claim_type, amount, searcher)),
+        ]
 
     if wants_write:
         given = expect.get("tool_args", {})
@@ -214,6 +270,40 @@ def script_for(case: EvalCase, searcher: BM25Searcher) -> list:
     return [TextTurn(_no_tool_answer(case))]
 
 
+def _settlement_answer(
+    claim_type: str, amount: str | None, searcher: BM25Searcher
+) -> str:
+    """The answer a model gives when it reports what the tool returned.
+
+    Rendered from the real settlement rather than from hardcoded strings, so
+    the scripted turn cannot quietly disagree with the code under test. If
+    someone edits the policy's limits, this answer moves with them and the
+    assertions in the dataset are what fail - which is the correct place for
+    that failure to show up.
+    """
+    from decimal import Decimal
+
+    from libs.policy.rules import settlement_for
+
+    sections = [(c.section_title, c.text) for c in searcher.chunks]
+    split = (
+        settlement_for(claim_type, Decimal(amount), sections) if amount else None
+    )
+    if split is None:
+        return (
+            f"Your policy document does not state a coverage limit or a "
+            f"deductible for {claim_type}, so I cannot tell you what would be "
+            f"paid on it. It covers water damage and personal property."
+        )
+    # The tool's own summary, verbatim, because that is what a model reporting
+    # the result actually writes - and it is the string that broke `ground`.
+    # It contains "$9,500 above the $25,000 limit", which the comparison check
+    # read as the false claim 9,500 > 25,000 and deleted the whole answer for.
+    # A scripted answer paraphrased around that shape is a scripted answer that
+    # cannot catch it.
+    return f"{split.summary()} ({split.section_title})"
+
+
 def _grounded_answer(case: EvalCase, searcher: BM25Searcher) -> str:
     """A faithful answer for the cases that should produce one, and a
     deliberately hallucinated one for EV-08 so the ground node is exercised."""
@@ -269,13 +359,21 @@ def run_case(case: EvalCase) -> Outcome:
         """The indexed policy, as the retrieval service serves it - so the
         coverage cap is read from the real document here too, not stubbed."""
         await searcher._ready()
-        return [(c.section_title, c.text) for c in searcher.chunks]
+        return [(c.section_title, c.text, c.source_file) for c in searcher.chunks]
 
     tools = [
         build_policy_tool(searcher),
         *build_claims_tools(repo, sections=sections),
     ]
-    graph = build_graph(llm, tools, checkpointer=InMemorySaver(), require_confirmation=True)
+    graph = build_graph(
+        llm,
+        tools,
+        checkpointer=InMemorySaver(),
+        require_confirmation=True,
+        # Wired exactly as the worker wires it, so the confirmation prompt the
+        # eval sees is the one a policyholder sees.
+        settlement=build_settlement_provider(sections),
+    )
 
     config = {"configurable": {"thread_id": uuid.uuid4().hex}, "recursion_limit": 30}
     state = {
@@ -309,8 +407,11 @@ def run_case(case: EvalCase) -> Outcome:
 
     names = [t["name"] for t in invocations]
     args_by_tool = {t["name"]: t["arguments"] for t in invocations}
+    readback = ""
     if awaiting:
-        pending = (result["__interrupt__"][0].value or {}).get("args", {})
+        value = result["__interrupt__"][0].value or {}
+        pending = value.get("args", {})
+        readback = str(value.get("readback", ""))
         names.append("submit_claim")
         args_by_tool["submit_claim"] = pending
 
@@ -323,6 +424,7 @@ def run_case(case: EvalCase) -> Outcome:
         confirmation_tier=int(result.get("confirmation_tier", 0)),
         awaiting_confirmation=awaiting,
         claim_written=len(written) > len(SEED),
+        confirmation_readback=readback,
     )
 
 
@@ -351,6 +453,51 @@ def test_gates_hold(capsys) -> None:
         if metric in GATES and ratio < GATES[metric]
     ]
     assert not breaches, "gate breach: " + ", ".join(breaches) + "\n" + report
+
+
+# Buckets where `ground` removing most of the answer is the point of the case.
+REWRITE_EXPECTED = {"citation_fidelity", "fabricated_values"}
+
+
+@pytest.mark.parametrize(
+    "case",
+    [c for c in CASES if c.bucket not in REWRITE_EXPECTED],
+    ids=[c.id for c in CASES if c.bucket not in REWRITE_EXPECTED],
+)
+def test_ground_does_not_materially_shorten_a_good_answer(case: EvalCase) -> None:
+    """`ground` may edit an answer. It may not gut one.
+
+    This is the assertion the suite was missing. Three separate checks in
+    `ground` were each capable of deleting a correct answer outright - one of
+    them down to an empty string, which the worker then emitted as a completed
+    turn with no message at all - and every gate stayed at 1.00 throughout,
+    because each one asserts on what the answer *contains* and none on what it
+    lost. `citation_precision` scored a perfect 1.00 on the answer "Under
+    ,000."
+
+    Every other case in the suite is a case where the model behaved well, so
+    the answer that reaches the policyholder should be substantially the answer
+    the model wrote. A citation stripped or a clause dropped is fine; losing a
+    fifth of it is a bug somewhere in the rewriting.
+    """
+    searcher = BM25Searcher()
+    scripted = next(
+        (t.text for t in reversed(script_for(case, searcher)) if isinstance(t, TextTurn)),
+        "",
+    )
+    if not scripted:
+        pytest.skip("no scripted answer to compare against")
+
+    outcome = run_case(case)
+    if outcome.awaiting_confirmation:
+        pytest.skip("the turn paused for confirmation; there is no final answer")
+
+    assert len(outcome.text) >= 0.8 * len(scripted), (
+        f"{case.id}: ground cut the answer from {len(scripted)} to "
+        f"{len(outcome.text)} characters\n"
+        f"  model wrote: {scripted[:200]!r}\n"
+        f"  reader sees: {outcome.text[:200]!r}"
+    )
 
 
 def test_dataset_covers_every_gated_metric() -> None:

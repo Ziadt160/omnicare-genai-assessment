@@ -31,6 +31,12 @@ class ToolCall(BaseModel):
 class ChatRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
+        # Trailing whitespace is not a different message. Without this a
+        # message the UI padded, or one pasted with a trailing newline, is a
+        # distinct string to every length check and every comparison
+        # downstream - and " " passes a min_length=1 that exists to reject an
+        # empty turn.
+        str_strip_whitespace=True,
         json_schema_extra={
             "examples": [
                 {"user_id": "usr_123", "message": "A pipe burst in my kitchen. Am I covered?"},
@@ -79,6 +85,17 @@ class ChatResponse(BaseModel):
     # --- additive ---
     conversation_id: str
     trace_id: str | None = None
+
+    # How far the system will stand behind this answer, 0-1, or null when no
+    # estimate was made. NOT the model's own number: that is a ceiling, lowered
+    # where the system can see the answer is unsupported. `model_confidence`
+    # keeps the raw claim so the two can be compared - the interesting case is
+    # a model reporting 0.95 on an answer that had to be capped to 0.3.
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    model_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence_reason: str | None = None
+    # The assistant said the policy does not answer the question.
+    unknown: bool = False
 
 
 class HealthResponse(BaseModel):
